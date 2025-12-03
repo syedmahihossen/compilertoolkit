@@ -1,11 +1,8 @@
-/* js/tools.js - Improved Compiler Toolkit logic
-   - Robust tokenizer (splits TE' -> T, E')
-   - Correct FIRST & FOLLOW per rules provided
-   - LL(1) table, left recursion elimination, left factoring
-   - Regex tester + rendering helpers
-*/
+/* js/tools.js - Final Verified Compiler Toolkit */
 
-/* ------- utilities ------- */
+/* =========================================
+   1. UTILITIES
+   ========================================= */
 function toast(msg) {
   const el = document.createElement('div');
   el.textContent = msg;
@@ -18,36 +15,38 @@ function toast(msg) {
     padding: '8px 12px',
     borderRadius: '8px',
     zIndex: 9999,
-    fontSize: '13px'
+    fontSize: '13px',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
   });
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 1400);
-}
-function escapeHtml(s) {
-  return (s + '')
-    .replace(/&/g,'&amp;')
-    .replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;');
+  setTimeout(() => el.remove(), 2000);
 }
 
-/* ------- tokenizer & parser ------- */
-/*
-  Token matching regex notes:
-  - Match nonterminals: single uppercase letter possibly followed by apostrophe(s), e.g. E, E', A''
-  - Match multi-letter lowercase terminals e.g. id, num123
-  - Match punctuation and single-char terminals: ( ) + * - / , etc.
-  - Accept ε or "epsilon" as epsilon
-*/
-const TOKEN_RE = /ε|epsilon|[A-Z]'+|[A-Z]|[a-z][a-z0-9]*'?|[0-9]+|[(){}\[\]+*\/\-,.:;<>|]/g;
+function escapeHtml(s) {
+  return (s + '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/* =========================================
+   2. TOKENIZER & PARSER
+   ========================================= */
+
+// Regex handles: ε/epsilon, Non-Terminals, Terminals, Numbers, Compound Operators (==, <=), and Punctuation
+const TOKEN_RE = /ε|epsilon|[A-Z][a-zA-Z0-9_]*'*|[a-z_][a-z0-9_]*'?|[0-9]+|(==|!=|<=|>=|\|\||&&|[(){}\[\]+*\/\\^=,.:;<>|$!-])/g;
 
 function tokenizeRHS(alt) {
   alt = (alt || '').trim();
   if (alt === '' || alt === 'ε' || alt.toLowerCase() === 'epsilon') return ['ε'];
+  
   const tokens = [];
   let m;
+  // Reset index to ensure fresh start for every string
+  TOKEN_RE.lastIndex = 0; 
+  
   while ((m = TOKEN_RE.exec(alt)) !== null) {
     const t = m[0];
-    // treat "epsilon" as ε
     if (t.toLowerCase() === 'epsilon') tokens.push('ε');
     else tokens.push(t);
   }
@@ -57,18 +56,24 @@ function tokenizeRHS(alt) {
 function parseGrammar(text) {
   const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
   const prods = {};
+  
   for (const line of lines) {
-    const idx = line.indexOf('->');
+    // Supports both -> and →
+    let idx = line.indexOf('->');
+    if (idx === -1) idx = line.indexOf('→');
     if (idx === -1) continue;
+    
     const lhs = line.slice(0, idx).trim();
     if (!lhs) continue;
+    
     const rhs = line.slice(idx + 2).trim();
-    // split on top-level | (we assume no grouping inside alternatives)
     const alts = rhs.split('|').map(a => a.trim());
+    
     if (!prods[lhs]) prods[lhs] = [];
+    
     for (const alt of alts) {
       const toks = tokenizeRHS(alt);
-      prods[lhs].push(toks.length ? toks : ['ε']);
+      prods[lhs].push(toks);
     }
   }
   return prods;
@@ -83,6 +88,7 @@ function stringifyGrammar(prods) {
 function identifySymbols(prods) {
   const nonterm = new Set(Object.keys(prods));
   const terms = new Set();
+  
   for (const [A, rhss] of Object.entries(prods)) {
     for (const rhs of rhss) {
       for (const t of rhs) {
@@ -98,8 +104,10 @@ function identifySymbols(prods) {
   };
 }
 
-/* ------- FIRST & FOLLOW ------- */
-/* firstOfString: compute FIRST of a sequence Y1 Y2 ... Yn */
+/* =========================================
+   3. ALGORITHMS: FIRST & FOLLOW
+   ========================================= */
+
 function firstOfString(rhs, FIRST, nonterminalsSet) {
   const res = new Set();
   let allNullable = true;
@@ -107,26 +115,27 @@ function firstOfString(rhs, FIRST, nonterminalsSet) {
   for (const sym of rhs) {
     if (sym === 'ε') {
       res.add('ε');
-      allNullable = true;
-      break;
+      continue;
     }
+    
     if (!nonterminalsSet.has(sym)) {
-      // terminal
-      res.add(sym);
+      res.add(sym); // Terminal
       allNullable = false;
       break;
     }
-    // sym is nonterminal
+    
+    // Non-terminal
     const fset = FIRST[sym] || new Set();
     for (const t of fset) {
       if (t !== 'ε') res.add(t);
     }
+    
     if (!fset.has('ε')) {
       allNullable = false;
       break;
     }
-    // else continue to next symbol
   }
+  
   if (allNullable) res.add('ε');
   return res;
 }
@@ -135,54 +144,28 @@ function computeFirst(prods) {
   const FIRST = {};
   const nonterms = Object.keys(prods);
   const nonterminalsSet = new Set(nonterms);
-  // initialize empty sets
+  
   for (const A of nonterms) FIRST[A] = new Set();
 
   let changed = true;
   while (changed) {
     changed = false;
     for (const A of nonterms) {
-      const rhss = prods[A];
-      for (const rhs of rhss) {
-        // if epsilon production explicitly
+      for (const rhs of prods[A]) {
+        // Explicit Epsilon case
         if (rhs.length === 1 && rhs[0] === 'ε') {
           if (!FIRST[A].has('ε')) { FIRST[A].add('ε'); changed = true; }
           continue;
         }
 
-        let prefixNullable = true;
-        for (const sym of rhs) {
-          if (sym === 'ε') {
-            if (!FIRST[A].has('ε')) { FIRST[A].add('ε'); changed = true; }
-            prefixNullable = false;
-            break;
-          }
-
-          if (!nonterminalsSet.has(sym)) {
-            // terminal
-            if (!FIRST[A].has(sym)) { FIRST[A].add(sym); changed = true; }
-            prefixNullable = false;
-            break;
-          }
-
-          // sym is nonterminal
-          const fSym = FIRST[sym];
-          for (const t of fSym) {
-            if (t !== 'ε' && !FIRST[A].has(t)) {
-              FIRST[A].add(t);
-              changed = true;
-            }
-          }
-          if (!fSym.has('ε')) {
-            prefixNullable = false;
-            break;
-          }
-          // else continue to next symbol
+        const initialSize = FIRST[A].size;
+        const stringFirst = firstOfString(rhs, FIRST, nonterminalsSet);
+        
+        for (const t of stringFirst) {
+          if (!FIRST[A].has(t)) FIRST[A].add(t);
         }
-
-        if (prefixNullable) {
-          if (!FIRST[A].has('ε')) { FIRST[A].add('ε'); changed = true; }
-        }
+        
+        if (FIRST[A].size > initialSize) changed = true;
       }
     }
   }
@@ -193,6 +176,7 @@ function computeFollow(prods, FIRST, startSymbol) {
   const FOLLOW = {};
   const nonterms = Object.keys(prods);
   const nonterminalsSet = new Set(nonterms);
+  
   for (const A of nonterms) FOLLOW[A] = new Set();
   if (startSymbol && FOLLOW[startSymbol]) FOLLOW[startSymbol].add('$');
 
@@ -203,29 +187,24 @@ function computeFollow(prods, FIRST, startSymbol) {
       for (const rhs of prods[A]) {
         for (let i = 0; i < rhs.length; i++) {
           const B = rhs[i];
-          if (!nonterminalsSet.has(B)) continue; // skip terminals
+          if (!nonterminalsSet.has(B)) continue;
 
           const beta = rhs.slice(i + 1);
-          if (beta.length > 0) {
-            const fb = firstOfString(beta, FIRST, nonterminalsSet);
-            // everything in FIRST(beta) except ε goes to FOLLOW(B)
-            for (const t of fb) {
+          // Calculate First(beta)
+          const trailer = (beta.length > 0) ? firstOfString(beta, FIRST, nonterminalsSet) : null;
+          
+          // Rule 1: First(beta) - {ε} -> Follow(B)
+          if (trailer) {
+            for (const t of trailer) {
               if (t !== 'ε' && !FOLLOW[B].has(t)) {
                 FOLLOW[B].add(t);
                 changed = true;
               }
             }
-            // if FIRST(beta) contains ε, add FOLLOW(A) to FOLLOW(B)
-            if (fb.has('ε')) {
-              for (const t of FOLLOW[A]) {
-                if (!FOLLOW[B].has(t)) {
-                  FOLLOW[B].add(t);
-                  changed = true;
-                }
-              }
-            }
-          } else {
-            // B at end: everything in FOLLOW(A) goes to FOLLOW(B)
+          }
+
+          // Rule 2: If beta is null/nullable -> Follow(A) -> Follow(B)
+          if (!trailer || trailer.has('ε')) {
             for (const t of FOLLOW[A]) {
               if (!FOLLOW[B].has(t)) {
                 FOLLOW[B].add(t);
@@ -240,160 +219,231 @@ function computeFollow(prods, FIRST, startSymbol) {
   return FOLLOW;
 }
 
-/* ------- LL(1) predictive table ------- */
+/* =========================================
+   4. ALGORITHM: LL(1) TABLE
+   ========================================= */
+
 function buildPredictiveTable(prods, FIRST, FOLLOW) {
   const table = {};
   const conflicts = [];
   const nonterms = Object.keys(prods);
   const nontermSet = new Set(nonterms);
-  // gather terminal set
+  
+  // Identify all Terminals for table headers
   const terminals = new Set();
   for (const A of nonterms) {
     table[A] = {};
     for (const rhs of prods[A]) {
-      const fs = firstOfString(rhs, FIRST, nontermSet);
-      for (const t of fs) if (t !== 'ε') terminals.add(t);
-      if (fs.has('ε')) {
-        for (const f of (FOLLOW[A] || new Set())) terminals.add(f);
+      for (const t of rhs) {
+        if (!nontermSet.has(t) && t !== 'ε') terminals.add(t);
+      }
+    }
+    // Include sync tokens from Follow set
+    if(FOLLOW[A]) {
+      for (const t of FOLLOW[A]) {
+        if (t !== '$') terminals.add(t);
       }
     }
   }
-  // fill table
+
   for (const A of nonterms) {
     for (const rhs of prods[A]) {
       const fs = firstOfString(rhs, FIRST, nontermSet);
+      
+      // 1. For terminal 'a' in First(alpha), add A -> alpha
       for (const t of fs) {
-        if (t === 'ε') continue;
-        table[A][t] = table[A][t] || [];
-        table[A][t].push(rhs);
+        if (t !== 'ε') {
+          table[A][t] = table[A][t] || [];
+          // Avoid duplicate insertion of exact same rule
+          if(!table[A][t].some(r => r.join(' ') === rhs.join(' '))) {
+             table[A][t].push(rhs);
+          }
+        }
       }
+      
+      // 2. If epsilon in First(alpha), add A -> alpha for 'b' in Follow(A)
       if (fs.has('ε')) {
-        for (const b of (FOLLOW[A] || new Set())) {
+        for (const b of FOLLOW[A]) {
           table[A][b] = table[A][b] || [];
-          table[A][b].push(rhs);
+           if(!table[A][b].some(r => r.join(' ') === rhs.join(' '))) {
+             table[A][b].push(rhs);
+          }
         }
       }
     }
   }
-  // detect conflicts
+
+  // Detect Conflicts
   for (const A of nonterms) {
-    for (const [t, list] of Object.entries(table[A])) {
-      if (list.length > 1) {
-        conflicts.push({ nonterminal: A, terminal: t, prods: list });
+    for (const t of Object.keys(table[A])) {
+      if (table[A][t].length > 1) {
+        conflicts.push({ nonterminal: A, terminal: t, prods: table[A][t] });
       }
     }
   }
+  
   return { table, conflicts, terminals: Array.from(terminals).sort() };
 }
 
-/* ------- left recursion elimination ------- */
+/* =========================================
+   5. ALGORITHM: LEFT RECURSION
+   ========================================= */
+
 function eliminateLeftRecursion(prods0) {
   const prods = {};
+  // Deep copy
   for (const k of Object.keys(prods0)) prods[k] = prods0[k].map(r => r.slice());
+  
   const nonterms = Object.keys(prods);
+
   for (let i = 0; i < nonterms.length; i++) {
     const Ai = nonterms[i];
+    
+    // Step 1: Eliminate Indirect Recursion
     for (let j = 0; j < i; j++) {
       const Aj = nonterms[j];
       const newR = [];
+      
       for (const rhs of prods[Ai]) {
         if (rhs[0] === Aj) {
+          // Ai -> Aj gamma
+          const gamma = rhs.slice(1);
+          // Substitute Aj -> delta
           for (const delta of prods[Aj]) {
-            const comb = delta.concat(rhs.slice(1));
-            newR.push(comb.length ? comb : ['ε']);
+            // CORNER CASE: If delta is epsilon, result is just gamma
+            let effectiveDelta = (delta.length === 1 && delta[0] === 'ε') ? [] : delta;
+            
+            // Combine
+            let combined = effectiveDelta.concat(gamma);
+            if (combined.length === 0) combined = ['ε'];
+            
+            newR.push(combined);
           }
-        } else newR.push(rhs);
+        } else {
+          newR.push(rhs);
+        }
       }
       prods[Ai] = newR;
     }
-    // eliminate immediate left recursion for Ai
-    const alphas = [], betas = [];
+
+    // Step 2: Eliminate Immediate Recursion
+    const alphas = [];
+    const betas = [];
+    
     for (const rhs of prods[Ai]) {
-      if (rhs[0] === Ai) alphas.push(rhs.slice(1).length ? rhs.slice(1) : ['ε']);
-      else betas.push(rhs);
+      if (rhs[0] === Ai) {
+        // Recursive: Ai -> Ai alpha
+        const alpha = rhs.slice(1);
+        alphas.push(alpha.length ? alpha : ['ε']);
+      } else {
+        betas.push(rhs);
+      }
     }
+
     if (alphas.length > 0) {
       let prime = Ai + "'";
       while (prods[prime]) prime += "'";
+      
       prods[prime] = [];
       const newAi = [];
+
+      // A -> beta A'
       for (const b of betas) {
-        if (b.length === 1 && b[0] === 'ε') newAi.push([prime]);
-        else newAi.push(b.concat([prime]));
+        // CORNER CASE: If beta is epsilon, result is just A'
+        let cleanB = (b.length === 1 && b[0] === 'ε') ? [] : b;
+        newAi.push(cleanB.concat([prime]));
       }
-      prods[Ai] = newAi.length ? newAi : [[prime]];
+      prods[Ai] = newAi;
+
+      // A' -> alpha A' | epsilon
       for (const a of alphas) {
-        if (a.length === 1 && a[0] === 'ε') prods[prime].push([prime]);
-        else prods[prime].push(a.concat([prime]));
+        let cleanA = (a.length === 1 && a[0] === 'ε') ? [] : a;
+        prods[prime].push(cleanA.concat([prime]));
       }
       prods[prime].push(['ε']);
-      nonterms.push(prime);
+      
+      nonterms.push(prime); 
     }
   }
   return prods;
 }
 
-/* ------- left factoring ------- */
+/* =========================================
+   6. ALGORITHM: LEFT FACTORING
+   ========================================= */
+
 function leftFactor(prods0) {
   let prods = {};
   for (const k of Object.keys(prods0)) prods[k] = prods0[k].map(r => r.slice());
+  
   let changed = true;
   while (changed) {
     changed = false;
-    for (const A of Object.keys(prods)) {
+    const nonterms = Object.keys(prods);
+
+    for (const A of nonterms) {
       const rhss = prods[A];
       if (rhss.length < 2) continue;
-      // group by first token
+      
       const groups = {};
       for (const rhs of rhss) {
-        const key = rhs[0] !== undefined ? rhs[0] : 'ε';
+        const key = rhs[0];
         (groups[key] = groups[key] || []).push(rhs);
       }
-      let factored = false;
+
       for (const key of Object.keys(groups)) {
-        const g = groups[key];
-        if (g.length <= 1) continue;
-        // compute longest common prefix
-        let prefix = g[0].slice();
-        for (let i = 1; i < g.length; i++) {
-          const other = g[i];
-          let k = 0;
-          while (k < prefix.length && k < other.length && prefix[k] === other[k]) k++;
-          prefix = prefix.slice(0, k);
-          if (prefix.length === 0) break;
-        }
-        if (prefix.length === 0) continue;
-        let prime = A + "_fact";
-        while (prods[prime]) prime += "_";
-        const newA = [];
-        const factR = [];
-        for (const rhs of rhss) {
-          let matches = rhs.length >= prefix.length;
-          for (let z = 0; z < prefix.length && matches; z++) {
-            if (rhs[z] !== prefix[z]) matches = false;
+        const group = groups[key];
+        if (group.length > 1) {
+          // Find longest common prefix
+          let prefix = group[0].slice();
+          
+          for (let i = 1; i < group.length; i++) {
+            const current = group[i];
+            let k = 0;
+            while (k < prefix.length && k < current.length && prefix[k] === current[k]) {
+              k++;
+            }
+            prefix = prefix.slice(0, k);
+            if (prefix.length === 0) break;
           }
-          if (matches) {
-            const rest = rhs.slice(prefix.length);
-            factR.push(rest.length ? rest : ['ε']);
-          } else newA.push(rhs);
+
+          if (prefix.length > 0) {
+            let prime = A + "_fact";
+            while (prods[prime]) prime += "_";
+            
+            // New A: Remove grouped items, add Prefix + Prime
+            const newA = prods[A].filter(r => !group.includes(r));
+            newA.push(prefix.concat([prime]));
+            prods[A] = newA;
+
+            // New Prime: The remainders
+            const newPrime = [];
+            for (const r of group) {
+              const remainder = r.slice(prefix.length);
+              // CORNER CASE: If remainder is empty (consumed by prefix), it becomes Epsilon
+              newPrime.push(remainder.length ? remainder : ['ε']);
+            }
+            prods[prime] = newPrime;
+            
+            changed = true;
+            break; 
+          }
         }
-        newA.push(prefix.concat([prime]));
-        prods[A] = newA;
-        prods[prime] = factR;
-        changed = true;
-        factored = true;
-        break;
       }
-      if (factored) break;
+      if (changed) break;
     }
   }
   return prods;
 }
 
-/* ------- regex testing ------- */
+/* =========================================
+   7. REGEX ENGINE & MATCHING
+   ========================================= */
+
 function testRegex(pattern, text) {
   try {
     const re = new RegExp(pattern, 'g');
+    // matchAll is safer/more detailed than match
     const matches = Array.from(text.matchAll(re)).map(m => ({
       text: m[0],
       index: m.index
@@ -404,214 +454,246 @@ function testRegex(pattern, text) {
   }
 }
 
-/* ------- rendering helpers ------- */
+/* =========================================
+   8. RENDERING HELPERS
+   ========================================= */
+
 function setPrettySet(s) {
-  if (!s) return '∅';
-  const arr = Array.isArray(s) ? s.slice() : Array.from(s);
-  if (arr.length === 0) return '∅';
-  return '{ ' + arr.join(', ') + ' }';
+  if (!s || s.size === 0) return '∅';
+  return '{ ' + Array.from(s).join(', ') + ' }';
 }
 
 function renderFirstFollow(prods, FIRST, FOLLOW) {
   const sym = identifySymbols(prods);
   const rows = sym.nonterminals.map(A => {
-    const f = setPrettySet(FIRST[A]);
-    const fo = setPrettySet(FOLLOW[A]);
-    return `<tr><td style="padding:8px;border-bottom:1px solid #f1f1f1"><strong>${escapeHtml(A)}</strong></td><td style="padding:8px;border-bottom:1px solid #f1f1f1">${escapeHtml(f)}</td><td style="padding:8px;border-bottom:1px solid #f1f1f1">${escapeHtml(fo)}</td></tr>`;
+    return `<tr>
+      <td style="padding:8px;border-bottom:1px solid #eee"><strong>${escapeHtml(A)}</strong></td>
+      <td style="padding:8px;border-bottom:1px solid #eee;color:#059669">${escapeHtml(setPrettySet(FIRST[A]))}</td>
+      <td style="padding:8px;border-bottom:1px solid #eee;color:#d97706">${escapeHtml(setPrettySet(FOLLOW[A]))}</td>
+    </tr>`;
   }).join('');
-  const start = escapeHtml(sym.start || '-');
-  return `<div style="margin-bottom:10px"><strong>Start symbol:</strong> ${start}</div>
-    <table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left"><th>Nonterminal</th><th>FIRST</th><th>FOLLOW</th></tr></thead><tbody>${rows}</tbody></table>`;
+  
+  return `<table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:14px;">
+    <thead><tr style="background:#f3f4f6;text-align:left">
+      <th style="padding:8px">Nonterminal</th>
+      <th style="padding:8px">FIRST</th>
+      <th style="padding:8px">FOLLOW</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 function renderTransformedGrammar(prods) {
-  return `<pre style="margin:0">${escapeHtml(stringifyGrammar(prods))}</pre>`;
+  return `<pre style="background:#f8fafc;padding:15px;border:1px solid #e2e8f0;border-radius:6px;font-family:monospace;color:#334155">${escapeHtml(stringifyGrammar(prods))}</pre>`;
 }
 
 function renderPredictiveTable(tableObj) {
   const table = tableObj.table;
   const nonterms = Object.keys(table);
-  const termSet = new Set(tableObj.terminals || []);
-  termSet.add('$');
-  const termList = Array.from(termSet).sort((a,b)=> a < b ? -1 : a > b ? 1 : 0);
+  const termList = (tableObj.terminals || []).concat(['$']);
 
-  let html = '<table style="width:100%;border-collapse:collapse"><thead><tr><th>NT \\ t</th>';
-  for (const t of termList) html += `<th style="padding:6px;border-bottom:1px solid #eee">${escapeHtml(t)}</th>`;
+  let html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;font-family:monospace;"><thead><tr style="background:#f3f4f6">';
+  html += '<th style="padding:8px;border:1px solid #e5e7eb">NT</th>';
+  for (const t of termList) html += `<th style="padding:8px;border:1px solid #e5e7eb;min-width:40px">${escapeHtml(t)}</th>`;
   html += '</tr></thead><tbody>';
 
   for (const A of nonterms) {
-    html += `<tr><td style="padding:8px;border-bottom:1px solid #f1f1f1"><strong>${escapeHtml(A)}</strong></td>`;
+    html += `<tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;background:#fff">${escapeHtml(A)}</td>`;
     for (const t of termList) {
       const cell = table[A][t];
-      if (!cell || cell.length === 0) html += '<td style="padding:10px;border-bottom:1px solid #f9f9f9">-</td>';
-      else {
-        const txt = cell.map(r => `${A} → ${r.join(' ')}`).join('<br>');
-        html += `<td style="padding:10px;border-bottom:1px solid #f9f9f9">${escapeHtml(txt)}</td>`;
+      html += '<td style="padding:8px;border:1px solid #e5e7eb;background:#fff">';
+      if (cell && cell.length > 0) {
+        html += cell.map(r => `<div style="white-space:nowrap;color:#2563eb">${A} → ${r.join(' ')}</div>`).join('');
       }
+      html += '</td>';
     }
     html += '</tr>';
   }
-  html += '</tbody></table>';
+  html += '</tbody></table></div>';
   return html;
 }
 
 function renderConflicts(conflicts) {
   if (!conflicts || conflicts.length === 0) {
-    return '<div style="margin-top:10px;color:#16a34a"><strong>No conflicts — grammar appears LL(1).</strong></div>';
+    return '<div style="margin-top:15px;padding:12px;background:#dcfce7;color:#166534;border-radius:6px;border:1px solid #bbf7d0"><strong>✅ Grammar is LL(1). No conflicts found.</strong></div>';
   }
-  let html = '<div style="margin-top:10px;color:#b91c1c"><strong>Conflicts:</strong><pre>';
-  html += conflicts.map(c => `NT ${c.nonterminal} on ${c.terminal}: ${c.prods.map(p => p.join(' ')).join(' || ')}`).join('\n');
-  html += '</pre></div>';
+  let html = '<div style="margin-top:15px;padding:12px;background:#fee2e2;color:#991b1b;border-radius:6px;border:1px solid #fecaca"><strong>⚠️ Conflicts Detected (Not LL(1)):</strong><ul style="margin:5px 0 0 15px;padding:0">';
+  html += conflicts.map(c => `<li>On <strong>${escapeHtml(c.nonterminal)}</strong>, input <strong>${escapeHtml(c.terminal)}</strong>: ${c.prods.map(p => escapeHtml(p.join(' '))).join(' <strong>OR</strong> ')}</li>`).join('');
+  html += '</ul></div>';
   return html;
 }
 
-/* ------- Optional UI wiring (same IDs as before) ------- */
+/* =========================================
+   9. UI EVENT BINDING
+   ========================================= */
+
 document.addEventListener('DOMContentLoaded', () => {
-  // tab wiring (if present)
-  const tabs = Array.from(document.querySelectorAll('.tab'));
-  const panels = Array.from(document.querySelectorAll('.tab-panel'));
-  tabs.forEach(btn => btn.addEventListener('click', () => {
-    tabs.forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    panels.forEach(p => p.classList.remove('active'));
-    const id = btn.dataset.tab + '-panel';
-    const el = document.getElementById(id);
-    if (el) el.classList.add('active');
-  }));
 
-  // FIRST & FOLLOW
-  const e1 = document.getElementById('example-first');
-  if (e1) e1.addEventListener('click', () => {
-    const el = document.getElementById('grammar-first');
-    if (el) el.value =
-`E -> T E'
-E' -> + T E' | ε
-T -> F T'
-T' -> * F T' | ε
-F -> ( E ) | id`;
-    toast('Example loaded');
-  });
-  const c1 = document.getElementById('compute-first');
-  if (c1) c1.addEventListener('click', () => {
-    const rawEl = document.getElementById('grammar-first');
-    const outEl = document.getElementById('first-output');
-    if (!rawEl || !outEl) { toast('Missing UI'); return; }
-    const raw = rawEl.value.trim();
-    if (!raw) { toast('Enter grammar'); return; }
-    const prods = parseGrammar(raw);
-    if (Object.keys(prods).length === 0) { toast('Could not parse grammar'); return; }
-    const FIRST = computeFirst(prods);
-    const FOLLOW = computeFollow(prods, FIRST, identifySymbols(prods).start);
-    outEl.innerHTML = renderFirstFollow(prods, FIRST, FOLLOW);
-  });
+    const get = (id) => document.getElementById(id);
 
-  // Left recursion example/run
-  const exLR = document.getElementById('example-leftrec');
-  if (exLR) exLR.addEventListener('click', () => {
-    const g = document.getElementById('grammar-leftrec');
-    if (g) g.value =
-`S -> S a | b
-A -> A c | d`;
-    toast('Example loaded');
-  });
-  const runLR = document.getElementById('run-leftrec');
-  if (runLR) runLR.addEventListener('click', () => {
-    const rawEl = document.getElementById('grammar-leftrec');
-    const outEl = document.getElementById('leftrec-output');
-    if (!rawEl || !outEl) { toast('Missing UI'); return; }
-    const raw = rawEl.value.trim(); if (!raw) { toast('Enter grammar'); return; }
-    const prods = parseGrammar(raw);
-    const res = eliminateLeftRecursion(prods);
-    outEl.innerHTML = renderTransformedGrammar(res);
-  });
+    // Tab Logic
+    document.querySelectorAll('.tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            btn.classList.add('active');
+            const p = get(btn.dataset.tab + '-panel');
+            if(p) p.classList.add('active');
+        });
+    });
 
-  // Left factoring example/run
-  const exLF = document.getElementById('example-leftfact');
-  if (exLF) exLF.addEventListener('click', () => {
-    const g = document.getElementById('grammar-leftfact');
-    if (g) g.value = `S -> a b c | a b d | e`;
-    toast('Example loaded');
-  });
-  const runLF = document.getElementById('run-leftfact');
-  if (runLF) runLF.addEventListener('click', () => {
-    const rawEl = document.getElementById('grammar-leftfact');
-    const outEl = document.getElementById('leftfact-output');
-    if (!rawEl || !outEl) { toast('Missing UI'); return; }
-    const raw = rawEl.value.trim(); if (!raw) { toast('Enter grammar'); return; }
-    const prods = parseGrammar(raw);
-    const res = leftFactor(prods);
-    outEl.innerHTML = renderTransformedGrammar(res);
-  });
+    // 1. First & Follow
+    const btnExFF = get('example-first');
+    if(btnExFF) btnExFF.addEventListener('click', () => {
+        const el = get('grammar-first');
+        if(el) el.value = "E -> T E'\nE' -> + T E' | ε\nT -> F T'\nT' -> * F T' | ε\nF -> ( E ) | id";
+        toast("Example Loaded");
+    });
 
-  // LL(1)
-  const exLL = document.getElementById('example-ll1');
-  if (exLL) exLL.addEventListener('click', () => {
-    const g = document.getElementById('grammar-ll1');
-    if (g) g.value =
-`E -> T E'
-E' -> + T E' | ε
-T -> F T'
-T' -> * F T' | ε
-F -> ( E ) | id`;
-    toast('Example loaded');
-  });
-  const runLL = document.getElementById('run-ll1');
-  if (runLL) runLL.addEventListener('click', () => {
-    const rawEl = document.getElementById('grammar-ll1');
-    const outEl = document.getElementById('ll1-output');
-    if (!rawEl || !outEl) { toast('Missing UI'); return; }
-    const raw = rawEl.value.trim(); if (!raw) { toast('Enter grammar'); return; }
-    const prods = parseGrammar(raw);
-    const FIRST = computeFirst(prods);
-    const FOLLOW = computeFollow(prods, FIRST, identifySymbols(prods).start);
-    const tableObj = buildPredictiveTable(prods, FIRST, FOLLOW);
-    let html = '<div style="margin-bottom:8px"><strong>FIRST &amp; FOLLOW</strong></div>';
-    html += renderFirstFollow(prods, FIRST, FOLLOW);
-    html += '<div style="margin-top:12px"><strong>Predictive table</strong></div>';
-    html += renderPredictiveTable(tableObj);
-    html += renderConflicts(tableObj.conflicts);
-    outEl.innerHTML = html;
-  });
+    const btnRunFF = get('compute-first');
+    if(btnRunFF) btnRunFF.addEventListener('click', () => {
+        const el = get('grammar-first');
+        const out = get('first-output');
+        if(!el || !out) return;
+        const raw = el.value.trim();
+        if(!raw) return toast("Please enter a grammar");
+        const prods = parseGrammar(raw);
+        if(Object.keys(prods).length === 0) return toast("Invalid Grammar");
+        const FIRST = computeFirst(prods);
+        const FOLLOW = computeFollow(prods, FIRST, identifySymbols(prods).start);
+        out.innerHTML = renderFirstFollow(prods, FIRST, FOLLOW);
+    });
 
-  // Regex example/run
-  const exR = document.getElementById('example-regex');
-  if (exR) exR.addEventListener('click', () => {
-    const p = document.getElementById('regex-pattern');
-    const t = document.getElementById('regex-text');
-    if (p) p.value = 'a(b|c)+';
-    if (t) t.value = 'test abc abb acbc aXc';
-    toast('Example loaded');
-  });
-  const runR = document.getElementById('run-regex');
-  if (runR) runR.addEventListener('click', () => {
-    const patEl = document.getElementById('regex-pattern');
-    const textEl = document.getElementById('regex-text');
-    const outH = document.getElementById('regex-highlight');
-    const outL = document.getElementById('regex-list');
-    if (!patEl || !textEl || !outH || !outL) { toast('Missing UI'); return; }
-    const pat = patEl.value.trim();
-    const txt = textEl.value || '';
-    if (!pat) { toast('Enter regex pattern'); return; }
-    const res = testRegex(pat, txt);
-    if (res.error) {
-      outH.textContent = 'Error: ' + res.error;
-      outL.innerHTML = '';
-      return;
-    }
-    const matches = res.matches;
-    outH.innerHTML = (() => {
-      if (!txt) return '<div class="muted">No text</div>';
-      if (!matches || matches.length === 0) return '<div class="muted">No matches</div>';
-      let last = 0, html = '';
-      for (const m of matches) {
-        html += escapeHtml(txt.slice(last, m.index));
-        html += `<span style="background:#fdecec;border-radius:6px;padding:2px 6px;margin:0 4px;color:#9b1c1c">${escapeHtml(m.text)}</span>`;
-        last = m.index + m.text.length;
-      }
-      html += escapeHtml(txt.slice(last));
-      html += `<div style="margin-top:10px;color:#6b7280">Total matches: ${matches.length}</div>`;
-      return html;
-    })();
-    outL.innerHTML = (matches || []).map(m => `<div style="display:flex;justify-content:space-between;padding:8px;background:#f3f4f6;border-radius:6px;margin-bottom:8px"><div>${escapeHtml(m.text)}</div><div style="color:#6b7280">[${m.index}, ${m.index + m.text.length - 1}]</div></div>`).join('');
-  });
+    // 2. Left Recursion
+    const btnExLR = get('example-leftrec');
+    if(btnExLR) btnExLR.addEventListener('click', () => {
+        const el = get('grammar-leftrec');
+        if(el) el.value = "E -> E + T | T\nT -> T * F | F\nF -> ( E ) | id";
+        toast("Example Loaded");
+    });
+
+    const btnRunLR = get('run-leftrec');
+    if(btnRunLR) btnRunLR.addEventListener('click', () => {
+        const el = get('grammar-leftrec');
+        const out = get('leftrec-output');
+        if(!el || !out) return;
+        const prods = parseGrammar(el.value);
+        if(Object.keys(prods).length === 0) return toast("Invalid Grammar");
+        const res = eliminateLeftRecursion(prods);
+        out.innerHTML = renderTransformedGrammar(res);
+    });
+
+    // 3. Left Factoring
+    const btnExLF = get('example-leftfact');
+    if(btnExLF) btnExLF.addEventListener('click', () => {
+        const el = get('grammar-leftfact');
+        if(el) el.value = "S -> i E t S | i E t S e S | a\nE -> b";
+        toast("Example Loaded");
+    });
+
+    const btnRunLF = get('run-leftfact');
+    if(btnRunLF) btnRunLF.addEventListener('click', () => {
+        const el = get('grammar-leftfact');
+        const out = get('leftfact-output');
+        if(!el || !out) return;
+        const prods = parseGrammar(el.value);
+        if(Object.keys(prods).length === 0) return toast("Invalid Grammar");
+        const res = leftFactor(prods);
+        out.innerHTML = renderTransformedGrammar(res);
+    });
+
+    // 4. LL(1) Table
+    const btnExLL = get('example-ll1');
+    if(btnExLL) btnExLL.addEventListener('click', () => {
+        const el = get('grammar-ll1');
+        if(el) el.value = "S -> A\nA -> a B | Ad\nB -> b\nC -> g"; 
+        toast("Example (Conflict) Loaded");
+    });
+
+    const btnRunLL = get('run-ll1');
+    if(btnRunLL) btnRunLL.addEventListener('click', () => {
+        const el = get('grammar-ll1');
+        const out = get('ll1-output');
+        if(!el || !out) return;
+        const prods = parseGrammar(el.value);
+        if(Object.keys(prods).length === 0) return toast("Invalid Grammar");
+        const FIRST = computeFirst(prods);
+        const FOLLOW = computeFollow(prods, FIRST, identifySymbols(prods).start);
+        const tableObj = buildPredictiveTable(prods, FIRST, FOLLOW);
+        out.innerHTML = `
+            <h4 style="margin:0 0 10px 0">First & Follow</h4>
+            ${renderFirstFollow(prods, FIRST, FOLLOW)}
+            <h4 style="margin:20px 0 10px 0">Predictive Parsing Table</h4>
+            ${renderPredictiveTable(tableObj)}
+            ${renderConflicts(tableObj.conflicts)}
+        `;
+    });
+
+    // 5. Regex Tester
+    const btnExReg = get('example-regex');
+    if(btnExReg) btnExReg.addEventListener('click', () => {
+        const p = get('regex-pattern');
+        const t = get('regex-text');
+        if(p) p.value = "a(b|c)+";
+        if(t) t.value = "test abc abb acbc aXc";
+        toast("Email Regex Loaded");
+    });
+
+    const btnRunReg = get('run-regex');
+    if(btnRunReg) btnRunReg.addEventListener('click', () => {
+        const pat = get('regex-pattern');
+        const txt = get('regex-text');
+        const outH = get('regex-highlight');
+        const outL = get('regex-list');
+        
+        if(!pat || !txt || !outH) return;
+        
+        const textVal = txt.value;
+        const res = testRegex(pat.value, textVal);
+        
+        if(res.error) {
+            outH.innerHTML = `<div style="color:#ef4444;font-weight:bold">Error: ${res.error}</div>`;
+            if(outL) outL.innerHTML = '';
+            return;
+        }
+        
+        const matches = res.matches;
+        
+        // Render Highlighted Text
+        let html = '';
+        let lastIdx = 0;
+        
+        if(matches.length === 0) {
+            html = escapeHtml(textVal);
+        } else {
+            matches.forEach(m => {
+                html += escapeHtml(textVal.substring(lastIdx, m.index));
+                html += `<span style="background:#fde68a;color:#92400e;border-radius:2px;font-weight:bold">${escapeHtml(m.text)}</span>`;
+                lastIdx = m.index + m.text.length;
+            });
+            html += escapeHtml(textVal.substring(lastIdx));
+        }
+        outH.innerHTML = `<div style="font-family:monospace;white-space:pre-wrap;background:#fff;padding:12px;border:1px solid #e5e7eb;border-radius:6px;min-height:50px">${html}</div>`;
+        
+        // Render Match List
+        if(outL) {
+            if(matches.length === 0) {
+                outL.innerHTML = '<div style="color:#6b7280;margin-top:10px">No matches found.</div>';
+            } else {
+                const listHtml = matches.map((m, i) => `
+                    <div style="display:flex;justify-content:space-between;padding:6px 10px;background:#f9fafb;border-bottom:1px solid #e5e7eb;font-size:13px;font-family:monospace">
+                        <span><strong>#${i+1}</strong>: ${escapeHtml(m.text)}</span>
+                        <span style="color:#6b7280">Index: ${m.index}</span>
+                    </div>
+                `).join('');
+                
+                outL.innerHTML = `
+                    <div style="margin-top:15px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
+                        <div style="background:#f3f4f6;padding:8px 10px;font-weight:bold;font-size:13px;border-bottom:1px solid #e5e7eb">Match List (${matches.length})</div>
+                        <div style="max-height:150px;overflow-y:auto">${listHtml}</div>
+                    </div>
+                `;
+            }
+        }
+    });
 });
