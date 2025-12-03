@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Compiler Toolkit — Tools</title>
+  <link rel="stylesheet" href="css/styles.css"/>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html"><span class="logo">C</span> Compiler Toolkit</a>
+      <nav><a class="nav-link active" href="tools.html">Tools</a></nav>
+    </div>
+  </header>
+
+  <main class="container page">
+    <h1 class="page-title">Tools</h1>
+    <p class="muted">Click a tool, preload an example, then run the action. Input on the left, output on the right.</p>
+
+    <div class="tool-card">
+      <div class="tabs" role="tablist" aria-label="Tools">
+        <button class="tab active" data-tab="first">FIRST &amp; FOLLOW</button>
+        <button class="tab" data-tab="left-rec">Left Recursion</button>
+        <button class="tab" data-tab="left-fact">Left Factoring</button>
+        <button class="tab" data-tab="ll1">LL(1) &amp; Parse Table</button>
+        <button class="tab" data-tab="regex">Regular Expression</button>
+      </div>
+
+      <!-- FIRST & FOLLOW -->
+      <div class="tab-panel active" id="first-panel">
+        <div class="panel-grid">
+          <div class="panel input-panel">
+            <label>Grammar Input</label>
+            <textarea id="grammar-first" rows="7" placeholder="S -> A a | b&#10;A -> A c | ε"></textarea>
+            <div class="actions-row">
+              <button id="example-first" class="btn outline">Preload Example</button>
+              <button id="compute-first" class="btn primary">Compute FIRST &amp; FOLLOW</button>
+            </div>
+            <div class="hint">
+              Format: one production per line. Use ε or "epsilon" for epsilon. Use spaces between symbols.
+            </div>
+          </div>
+
+          <div class="panel output-panel">
+            <label>Output — FIRST &amp; FOLLOW</label>
+            <div id="first-output" class="output-box">(results appear here)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Left Recursion -->
+      <div class="tab-panel" id="left-rec-panel">
+        <div class="panel-grid">
+          <div class="panel input-panel">
+            <label>Grammar Input</label>
+            <textarea id="grammar-leftrec" rows="7" placeholder="S -> S a | b&#10;A -> A c | d"></textarea>
+            <div class="actions-row">
+              <button id="example-leftrec" class="btn outline">Preload Example</button>
+              <button id="run-leftrec" class="btn primary">Eliminate Left Recursion</button>
+            </div>
+            <div class="hint">
+              Supports indirect and immediate left recursion.
+            </div>
+          </div>
+
+          <div class="panel output-panel">
+            <label>Result</label>
+            <div id="leftrec-output" class="output-box transformed">(results appear here)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Left Factoring -->
+      <div class="tab-panel" id="left-fact-panel">
+        <div class="panel-grid">
+          <div class="panel input-panel">
+            <label>Grammar Input</label>
+            <textarea id="grammar-leftfact" rows="7" placeholder="S -> a b c | a b d | e"></textarea>
+            <div class="actions-row">
+              <button id="example-leftfact" class="btn outline">Preload Example</button>
+              <button id="run-leftfact" class="btn primary">Apply Left Factoring</button>
+            </div>
+            <div class="hint">
+              Detects common prefixes and introduces new nonterminals.
+            </div>
+          </div>
+
+          <div class="panel output-panel">
+            <label>Result</label>
+            <div id="leftfact-output" class="output-box transformed">(results appear here)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LL(1) & Parse Table -->
+      <div class="tab-panel" id="ll1-panel">
+        <div class="panel-grid">
+          <div class="panel input-panel">
+            <label>Grammar Input</label>
+            <textarea id="grammar-ll1" rows="7" placeholder="E  -> T E'&#10;E' -> + T E' | ε&#10;T  -> F T'&#10;T' -> * F T' | ε&#10;F  -> ( E ) | id"></textarea>
+            <div class="actions-row">
+              <button id="example-ll1" class="btn outline">Preload Example</button>
+              <button id="run-ll1" class="btn primary">Build LL(1) Parse Table</button>
+            </div>
+            <div class="hint">
+              Uses FIRST &amp; FOLLOW to build predictive table and reports conflicts.
+            </div>
+          </div>
+
+          <div class="panel output-panel">
+            <label>Output — FIRST/FOLLOW &amp; Parse Table</label>
+            <div id="ll1-output" class="output-box">(results appear here)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Regular Expression -->
+      <div class="tab-panel" id="regex-panel">
+        <div class="panel-grid">
+          <div class="panel input-panel">
+            <label>Regular Expression (no / /)</label>
+            <input id="regex-pattern" placeholder="a(b|c)+"/>
+            <label style="margin-top:12px">Sample Text</label>
+            <textarea id="regex-text" rows="6" placeholder="test abc abb acbc aXc"></textarea>
+            <div class="actions-row">
+              <button id="example-regex" class="btn outline">Preload Example</button>
+              <button id="run-regex" class="btn primary">Test Regex</button>
+            </div>
+            <div class="hint">
+              Enter pattern only (no slashes). Example: a(b|c)+
+            </div>
+          </div>
+
+          <div class="panel output-panel">
+            <label>Highlighted Matches</label>
+            <div id="regex-highlight" class="output-box" style="min-height:70px">(matches highlighted here)</div>
+            <div style="height:10px"></div>
+            <label>Match List</label>
+            <div id="regex-list" class="match-list" style="margin-top:8px"></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div>© <span id="y"></span> Compiler Toolkit</div>
+      <div><a href="index.html">Home</a></div>
+    </div>
+  </footer>
+
+  <script src="js/tools.js"></script>
+  <script>document.getElementById('y').textContent = new Date().getFullYear();</script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Compiler Toolkit</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html"><span class="logo">C</span> Compiler Toolkit</a>
+      <nav><a class="nav-link" href="tools.html">Open Tools</a></nav>
+    </div>
+  </header>
+
+  <main class="container hero-home">
+    <div class="hero-card-landing">
+      <div class="hero-left">
+        <span class="kicker">Compiler Design Toolkit</span>
+        <h1>Build, analyze and transform grammars with confidence</h1>
+        <p class="muted">
+          FIRST/FOLLOW, left recursion removal, left factoring, LL(1) parse table, and regular expression tester —
+          all in one clean UI with example inputs and clear outputs.
+        </p>
+        <div style="margin-top:18px">
+          <a class="btn primary large" href="tools.html">Open Tools</a>
+        </div>
+
+        <div class="hero-highlights">
+          <div class="hero-highlight">
+            <strong>FIRST &amp; FOLLOW</strong>
+            <p class="muted-small">Compute sets needed for LL(1) parsing.</p>
+          </div>
+          <div class="hero-highlight">
+            <strong>Transform Grammars</strong>
+            <p class="muted-small">Remove left recursion, apply left factoring.</p>
+          </div>
+          <div class="hero-highlight">
+            <strong>LL(1) &amp; Regex</strong>
+            <p class="muted-small">Predictive parse table &amp; pattern testing.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-right">
+        <div class="hero-preview">
+          <div class="preview-card">
+            <div class="preview-title">FIRST &amp; FOLLOW</div>
+            <pre class="preview-code">S -&gt; A a | b
+A -&gt; A c | ε</pre>
+            <div class="preview-pill">Tool Output → FIRST(S) = { b, a, c }</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div>© <span id="yr"></span> Compiler Toolkit</div>
+      <div><a href="tools.html">Tools</a></div>
+    </div>
+  </footer>
+  <script>document.getElementById('yr').textContent = new Date().getFullYear();</script>
+</body>
+</html>
