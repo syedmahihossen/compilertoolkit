@@ -1,12 +1,17 @@
-# Compiler Toolkit (Static UI)
+Compiler Toolkit 🛠️
 
-Single-page static tools for compiler design: FIRST/FOLLOW, Left Recursion, Left Factoring, LL(1), Regex Tester.
+Compiler Toolkit is a professional-grade web workbench designed to help students and developers visualize, analyze, and transform Context-Free Grammars (CFGs).
 
-## Run locally
-```bash
-# quick: open tools.html in browser
-open tools.html
+Stop calculating FIRST & FOLLOW sets by hand. This tool automates the tedious parts of compiler construction, offering a split-screen interface to write grammars and see real-time results.
 
-# or serve via Python HTTP server (recommended)
-python3 -m http.server 8000
-# then open http://localhost:8000/tools.html
+Grammar Analysis
+
+FIRST & FOLLOW Sets: Automatically computes sets for all non-terminals, handling complex dependencies and epsilon transitions.
+
+LL(1) Parsing Table: Generates predictive parsing tables and automatically detects collisions/conflicts to determine if a grammar is valid LL(1).
+
+Grammar Transformation
+
+Left Recursion Removal: Detects and eliminates both immediate and indirect left recursion to make grammars suitable for top-down parsing.
+
+Left Factoring: Automatically refactors grammars to remove common prefixes and resolve ambiguity.
