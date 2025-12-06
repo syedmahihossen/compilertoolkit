@@ -105,37 +105,66 @@ function identifySymbols(prods) {
 }
 
 /* =========================================
-   3. ALGORITHMS: FIRST & FOLLOW
+   3. ALGORITHMS: FIRST & FOLLOW (FIXED)
    ========================================= */
 
-function firstOfString(rhs, FIRST, nonterminalsSet) {
+// Helper: Breaks strings like "Cbb" into ["C", "b", "b"]
+// but keeps "id" or "epsilon" as single tokens.
+function tokenize(raw, nonterminalsSet) {
+  // 1. If it's already an array, just flatten it
+  if (Array.isArray(raw)) {
+    // recursively tokenize strings inside the array
+    return raw.flatMap(r => tokenize(r, nonterminalsSet));
+  }
+  
+  const str = String(raw).trim();
+  if (!str) return [];
+
+  // 2. Handle known multi-character terminals
+  if (str === 'id' || str === 'ε' || str === 'epsilon') {
+    return [str];
+  }
+
+  // 3. If the user used spaces (e.g. "A C B"), split by space
+  if (str.includes(' ')) {
+    return str.split(/\s+/);
+  }
+
+  // 4. If the string is EXACTLY one known Non-Terminal (e.g. "S"), keep it
+  if (nonterminalsSet.has(str)) {
+    return [str];
+  }
+
+  // 5. Default: Split into characters (e.g. "Cbb" -> ["C", "b", "b"])
+  return str.split('');
+}
+
+function firstOfString(tokens, FIRST, nonterminalsSet) {
   const res = new Set();
   let allNullable = true;
 
-  for (const sym of rhs) {
-    if (sym === 'ε') {
-      res.add('ε');
-      continue;
-    }
-    
+  for (const sym of tokens) {
+    if (sym === 'ε' || sym === 'epsilon') continue;
+
+    // Terminal
     if (!nonterminalsSet.has(sym)) {
-      res.add(sym); // Terminal
+      res.add(sym);
       allNullable = false;
       break;
     }
-    
+
     // Non-terminal
     const fset = FIRST[sym] || new Set();
     for (const t of fset) {
-      if (t !== 'ε') res.add(t);
+      if (t !== 'ε' && t !== 'epsilon') res.add(t);
     }
-    
-    if (!fset.has('ε')) {
+
+    if (!fset.has('ε') && !fset.has('epsilon')) {
       allNullable = false;
       break;
     }
   }
-  
+
   if (allNullable) res.add('ε');
   return res;
 }
@@ -144,27 +173,25 @@ function computeFirst(prods) {
   const FIRST = {};
   const nonterms = Object.keys(prods);
   const nonterminalsSet = new Set(nonterms);
-  
+
   for (const A of nonterms) FIRST[A] = new Set();
 
   let changed = true;
   while (changed) {
     changed = false;
     for (const A of nonterms) {
-      for (const rhs of prods[A]) {
-        // Explicit Epsilon case
-        if (rhs.length === 1 && rhs[0] === 'ε') {
-          if (!FIRST[A].has('ε')) { FIRST[A].add('ε'); changed = true; }
-          continue;
-        }
+      for (const rawRhs of prods[A]) {
+        // STEP 1: Tokenize the Right-Hand Side correctly
+        const rhs = tokenize(rawRhs, nonterminalsSet);
 
+        // STEP 2: Standard First calculation
         const initialSize = FIRST[A].size;
         const stringFirst = firstOfString(rhs, FIRST, nonterminalsSet);
-        
+
         for (const t of stringFirst) {
           if (!FIRST[A].has(t)) FIRST[A].add(t);
         }
-        
+
         if (FIRST[A].size > initialSize) changed = true;
       }
     }
@@ -176,35 +203,41 @@ function computeFollow(prods, FIRST, startSymbol) {
   const FOLLOW = {};
   const nonterms = Object.keys(prods);
   const nonterminalsSet = new Set(nonterms);
-  
+
   for (const A of nonterms) FOLLOW[A] = new Set();
-  if (startSymbol && FOLLOW[startSymbol]) FOLLOW[startSymbol].add('$');
+  
+  if (startSymbol && nonterminalsSet.has(startSymbol)) {
+    FOLLOW[startSymbol].add('$');
+  }
 
   let changed = true;
   while (changed) {
     changed = false;
     for (const A of nonterms) {
-      for (const rhs of prods[A]) {
+      for (const rawRhs of prods[A]) {
+        
+        // STEP 1: Tokenize correctly here too!
+        const rhs = tokenize(rawRhs, nonterminalsSet);
+
         for (let i = 0; i < rhs.length; i++) {
           const B = rhs[i];
           if (!nonterminalsSet.has(B)) continue;
 
           const beta = rhs.slice(i + 1);
-          // Calculate First(beta)
           const trailer = (beta.length > 0) ? firstOfString(beta, FIRST, nonterminalsSet) : null;
-          
-          // Rule 1: First(beta) - {ε} -> Follow(B)
+
+          // Rule 2
           if (trailer) {
             for (const t of trailer) {
-              if (t !== 'ε' && !FOLLOW[B].has(t)) {
+              if (t !== 'ε' && t !== 'epsilon' && !FOLLOW[B].has(t)) {
                 FOLLOW[B].add(t);
                 changed = true;
               }
             }
           }
 
-          // Rule 2: If beta is null/nullable -> Follow(A) -> Follow(B)
-          if (!trailer || trailer.has('ε')) {
+          // Rule 3
+          if (!trailer || trailer.has('ε') || trailer.has('epsilon')) {
             for (const t of FOLLOW[A]) {
               if (!FOLLOW[B].has(t)) {
                 FOLLOW[B].add(t);
@@ -218,7 +251,6 @@ function computeFollow(prods, FIRST, startSymbol) {
   }
   return FOLLOW;
 }
-
 /* =========================================
    4. ALGORITHM: LL(1) TABLE
    ========================================= */
