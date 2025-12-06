@@ -1,5 +1,3 @@
-/* js/tools.js - Final Verified Compiler Toolkit */
-
 /* =========================================
    1. UTILITIES
    ========================================= */
@@ -28,52 +26,51 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
-
 /* =========================================
-   2. TOKENIZER & PARSER
-   ========================================= */
-
-// Regex handles: ε/epsilon, Non-Terminals, Terminals, Numbers, Compound Operators (==, <=), and Punctuation
-const TOKEN_RE = /ε|epsilon|[A-Z][a-zA-Z0-9_]*'*|[a-z_][a-z0-9_]*'?|[0-9]+|(==|!=|<=|>=|\|\||&&|[(){}\[\]+*\/\\^=,.:;<>|$!-])/g;
+ 2. TOKENIZER & PARSER (MASTER VERSION)
+ ========================================= */
+const TOKEN_RE = /ε|epsilon|id|[A-Z](?:_[a-zA-Z0-9]+|')*|[a-z0-9]|(==|!=|<=|>=|\|\||&&|[(){}\[\]+*\/\\^=,.:;<>|$!-])/g;
 
 function tokenizeRHS(alt) {
   alt = (alt || '').trim();
-  if (alt === '' || alt === 'ε' || alt.toLowerCase() === 'epsilon') return ['ε'];
-  
+  if (!alt) return ['ε'];
+  if (alt === 'ε' || alt.toLowerCase() === 'epsilon') return ['ε'];
+
+  // 1. Trust spaces if user provided them (e.g. "A C B")
+  if (alt.includes(' ')) {
+    return alt.split(/\s+/);
+  }
+
+  // 2. Otherwise use the Master Regex to split intelligently
   const tokens = [];
   let m;
-  // Reset index to ensure fresh start for every string
-  TOKEN_RE.lastIndex = 0; 
-  
+  TOKEN_RE.lastIndex = 0;
   while ((m = TOKEN_RE.exec(alt)) !== null) {
-    const t = m[0];
-    if (t.toLowerCase() === 'epsilon') tokens.push('ε');
-    else tokens.push(t);
+    tokens.push(m[0]);
   }
+
   return tokens.length ? tokens : ['ε'];
 }
 
 function parseGrammar(text) {
   const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
   const prods = {};
-  
+
   for (const line of lines) {
-    // Supports both -> and →
     let idx = line.indexOf('->');
     if (idx === -1) idx = line.indexOf('→');
     if (idx === -1) continue;
-    
+
     const lhs = line.slice(0, idx).trim();
-    if (!lhs) continue;
-    
     const rhs = line.slice(idx + 2).trim();
     const alts = rhs.split('|').map(a => a.trim());
-    
+
     if (!prods[lhs]) prods[lhs] = [];
-    
+
     for (const alt of alts) {
-      const toks = tokenizeRHS(alt);
-      prods[lhs].push(toks);
+      // The parser tokenizes immediately. 
+      // All algorithms downstream will receive clean arrays.
+      prods[lhs].push(tokenizeRHS(alt));
     }
   }
   return prods;
@@ -88,11 +85,11 @@ function stringifyGrammar(prods) {
 function identifySymbols(prods) {
   const nonterm = new Set(Object.keys(prods));
   const terms = new Set();
-  
+
   for (const [A, rhss] of Object.entries(prods)) {
     for (const rhs of rhss) {
       for (const t of rhs) {
-        if (t === 'ε') continue;
+        if (t === 'ε' || t === 'epsilon') continue;
         if (!nonterm.has(t)) terms.add(t);
       }
     }
@@ -105,39 +102,8 @@ function identifySymbols(prods) {
 }
 
 /* =========================================
-   3. ALGORITHMS: FIRST & FOLLOW (FIXED)
-   ========================================= */
-
-// Helper: Breaks strings like "Cbb" into ["C", "b", "b"]
-// but keeps "id" or "epsilon" as single tokens.
-function tokenize(raw, nonterminalsSet) {
-  // 1. If it's already an array, just flatten it
-  if (Array.isArray(raw)) {
-    // recursively tokenize strings inside the array
-    return raw.flatMap(r => tokenize(r, nonterminalsSet));
-  }
-  
-  const str = String(raw).trim();
-  if (!str) return [];
-
-  // 2. Handle known multi-character terminals
-  if (str === 'id' || str === 'ε' || str === 'epsilon') {
-    return [str];
-  }
-
-  // 3. If the user used spaces (e.g. "A C B"), split by space
-  if (str.includes(' ')) {
-    return str.split(/\s+/);
-  }
-
-  // 4. If the string is EXACTLY one known Non-Terminal (e.g. "S"), keep it
-  if (nonterminalsSet.has(str)) {
-    return [str];
-  }
-
-  // 5. Default: Split into characters (e.g. "Cbb" -> ["C", "b", "b"])
-  return str.split('');
-}
+  3. ALGORITHMS: FIRST & FOLLOW (OPTIMIZED)
+  ========================================= */
 
 function firstOfString(tokens, FIRST, nonterminalsSet) {
   const res = new Set();
@@ -146,23 +112,25 @@ function firstOfString(tokens, FIRST, nonterminalsSet) {
   for (const sym of tokens) {
     if (sym === 'ε' || sym === 'epsilon') continue;
 
-    // Terminal
+    // 1. If Terminal, add it and stop
     if (!nonterminalsSet.has(sym)) {
       res.add(sym);
       allNullable = false;
       break;
     }
 
-    // Non-terminal
+    // 2. If Non-Terminal, add its FIRST set (excluding epsilon)
     const fset = FIRST[sym] || new Set();
     for (const t of fset) {
       if (t !== 'ε' && t !== 'epsilon') res.add(t);
     }
 
+    // 3. If this Non-Terminal is NOT nullable, stop here
     if (!fset.has('ε') && !fset.has('epsilon')) {
       allNullable = false;
       break;
     }
+    // If it WAS nullable, loop continues to next symbol...
   }
 
   if (allNullable) res.add('ε');
@@ -180,18 +148,13 @@ function computeFirst(prods) {
   while (changed) {
     changed = false;
     for (const A of nonterms) {
-      for (const rawRhs of prods[A]) {
-        // STEP 1: Tokenize the Right-Hand Side correctly
-        const rhs = tokenize(rawRhs, nonterminalsSet);
-
-        // STEP 2: Standard First calculation
+      for (const rhs of prods[A]) {
         const initialSize = FIRST[A].size;
         const stringFirst = firstOfString(rhs, FIRST, nonterminalsSet);
 
         for (const t of stringFirst) {
           if (!FIRST[A].has(t)) FIRST[A].add(t);
         }
-
         if (FIRST[A].size > initialSize) changed = true;
       }
     }
@@ -205,7 +168,7 @@ function computeFollow(prods, FIRST, startSymbol) {
   const nonterminalsSet = new Set(nonterms);
 
   for (const A of nonterms) FOLLOW[A] = new Set();
-  
+
   if (startSymbol && nonterminalsSet.has(startSymbol)) {
     FOLLOW[startSymbol].add('$');
   }
@@ -214,11 +177,7 @@ function computeFollow(prods, FIRST, startSymbol) {
   while (changed) {
     changed = false;
     for (const A of nonterms) {
-      for (const rawRhs of prods[A]) {
-        
-        // STEP 1: Tokenize correctly here too!
-        const rhs = tokenize(rawRhs, nonterminalsSet);
-
+      for (const rhs of prods[A]) {
         for (let i = 0; i < rhs.length; i++) {
           const B = rhs[i];
           if (!nonterminalsSet.has(B)) continue;
@@ -226,7 +185,7 @@ function computeFollow(prods, FIRST, startSymbol) {
           const beta = rhs.slice(i + 1);
           const trailer = (beta.length > 0) ? firstOfString(beta, FIRST, nonterminalsSet) : null;
 
-          // Rule 2
+          // Rule 2: Follow(B) += First(beta) - {ε}
           if (trailer) {
             for (const t of trailer) {
               if (t !== 'ε' && t !== 'epsilon' && !FOLLOW[B].has(t)) {
@@ -236,7 +195,7 @@ function computeFollow(prods, FIRST, startSymbol) {
             }
           }
 
-          // Rule 3
+          // Rule 3: Follow(B) += Follow(A)
           if (!trailer || trailer.has('ε') || trailer.has('epsilon')) {
             for (const t of FOLLOW[A]) {
               if (!FOLLOW[B].has(t)) {
@@ -260,7 +219,7 @@ function buildPredictiveTable(prods, FIRST, FOLLOW) {
   const conflicts = [];
   const nonterms = Object.keys(prods);
   const nontermSet = new Set(nonterms);
-  
+
   // Identify all Terminals for table headers
   const terminals = new Set();
   for (const A of nonterms) {
@@ -271,7 +230,7 @@ function buildPredictiveTable(prods, FIRST, FOLLOW) {
       }
     }
     // Include sync tokens from Follow set
-    if(FOLLOW[A]) {
+    if (FOLLOW[A]) {
       for (const t of FOLLOW[A]) {
         if (t !== '$') terminals.add(t);
       }
@@ -281,24 +240,24 @@ function buildPredictiveTable(prods, FIRST, FOLLOW) {
   for (const A of nonterms) {
     for (const rhs of prods[A]) {
       const fs = firstOfString(rhs, FIRST, nontermSet);
-      
+
       // 1. For terminal 'a' in First(alpha), add A -> alpha
       for (const t of fs) {
         if (t !== 'ε') {
           table[A][t] = table[A][t] || [];
           // Avoid duplicate insertion of exact same rule
-          if(!table[A][t].some(r => r.join(' ') === rhs.join(' '))) {
-             table[A][t].push(rhs);
+          if (!table[A][t].some(r => r.join(' ') === rhs.join(' '))) {
+            table[A][t].push(rhs);
           }
         }
       }
-      
+
       // 2. If epsilon in First(alpha), add A -> alpha for 'b' in Follow(A)
       if (fs.has('ε')) {
         for (const b of FOLLOW[A]) {
           table[A][b] = table[A][b] || [];
-           if(!table[A][b].some(r => r.join(' ') === rhs.join(' '))) {
-             table[A][b].push(rhs);
+          if (!table[A][b].some(r => r.join(' ') === rhs.join(' '))) {
+            table[A][b].push(rhs);
           }
         }
       }
@@ -313,7 +272,7 @@ function buildPredictiveTable(prods, FIRST, FOLLOW) {
       }
     }
   }
-  
+
   return { table, conflicts, terminals: Array.from(terminals).sort() };
 }
 
@@ -325,17 +284,17 @@ function eliminateLeftRecursion(prods0) {
   const prods = {};
   // Deep copy
   for (const k of Object.keys(prods0)) prods[k] = prods0[k].map(r => r.slice());
-  
+
   const nonterms = Object.keys(prods);
 
   for (let i = 0; i < nonterms.length; i++) {
     const Ai = nonterms[i];
-    
+
     // Step 1: Eliminate Indirect Recursion
     for (let j = 0; j < i; j++) {
       const Aj = nonterms[j];
       const newR = [];
-      
+
       for (const rhs of prods[Ai]) {
         if (rhs[0] === Aj) {
           // Ai -> Aj gamma
@@ -344,11 +303,11 @@ function eliminateLeftRecursion(prods0) {
           for (const delta of prods[Aj]) {
             // CORNER CASE: If delta is epsilon, result is just gamma
             let effectiveDelta = (delta.length === 1 && delta[0] === 'ε') ? [] : delta;
-            
+
             // Combine
             let combined = effectiveDelta.concat(gamma);
             if (combined.length === 0) combined = ['ε'];
-            
+
             newR.push(combined);
           }
         } else {
@@ -361,7 +320,7 @@ function eliminateLeftRecursion(prods0) {
     // Step 2: Eliminate Immediate Recursion
     const alphas = [];
     const betas = [];
-    
+
     for (const rhs of prods[Ai]) {
       if (rhs[0] === Ai) {
         // Recursive: Ai -> Ai alpha
@@ -375,7 +334,7 @@ function eliminateLeftRecursion(prods0) {
     if (alphas.length > 0) {
       let prime = Ai + "'";
       while (prods[prime]) prime += "'";
-      
+
       prods[prime] = [];
       const newAi = [];
 
@@ -393,81 +352,82 @@ function eliminateLeftRecursion(prods0) {
         prods[prime].push(cleanA.concat([prime]));
       }
       prods[prime].push(['ε']);
-      
-      nonterms.push(prime); 
+
+      nonterms.push(prime);
     }
   }
   return prods;
 }
 
 /* =========================================
-   6. ALGORITHM: LEFT FACTORING
+   6. ALGORITHM: LEFT FACTORING (SINGLE PASS)
    ========================================= */
 
 function leftFactor(prods0) {
+  // Deep copy the grammar (it is already tokenized by Block 1)
   let prods = {};
-  for (const k of Object.keys(prods0)) prods[k] = prods0[k].map(r => r.slice());
-  
-  let changed = true;
-  while (changed) {
-    changed = false;
-    const nonterms = Object.keys(prods);
+  for (const k of Object.keys(prods0)) {
+    prods[k] = prods0[k].map(rhs => [...rhs]);
+  }
 
-    for (const A of nonterms) {
-      const rhss = prods[A];
-      if (rhss.length < 2) continue;
-      
-      const groups = {};
-      for (const rhs of rhss) {
-        const key = rhs[0];
-        (groups[key] = groups[key] || []).push(rhs);
-      }
+  const originalNonTerms = Object.keys(prods);
 
-      for (const key of Object.keys(groups)) {
-        const group = groups[key];
-        if (group.length > 1) {
-          // Find longest common prefix
-          let prefix = group[0].slice();
-          
-          for (let i = 1; i < group.length; i++) {
-            const current = group[i];
-            let k = 0;
-            while (k < prefix.length && k < current.length && prefix[k] === current[k]) {
-              k++;
-            }
-            prefix = prefix.slice(0, k);
-            if (prefix.length === 0) break;
+  for (const A of originalNonTerms) {
+    const rhss = prods[A];
+    if (rhss.length < 2) continue;
+
+    // Group by First Symbol
+    const groups = {};
+    for (const rhs of rhss) {
+      if (rhs.length === 0) continue;
+      const firstSym = rhs[0];
+      if (!groups[firstSym]) groups[firstSym] = [];
+      groups[firstSym].push(rhs);
+    }
+
+    // Process Groups
+    for (const key of Object.keys(groups)) {
+      const group = groups[key];
+
+      if (group.length > 1) {
+        // Find Longest Common Prefix
+        let prefix = group[0].slice();
+        for (let i = 1; i < group.length; i++) {
+          const current = group[i];
+          let k = 0;
+          while (k < prefix.length && k < current.length && prefix[k] === current[k]) {
+            k++;
           }
+          prefix = prefix.slice(0, k);
+          if (prefix.length === 0) break;
+        }
 
-          if (prefix.length > 0) {
-            let prime = A + "_fact";
-            while (prods[prime]) prime += "_";
-            
-            // New A: Remove grouped items, add Prefix + Prime
-            const newA = prods[A].filter(r => !group.includes(r));
-            newA.push(prefix.concat([prime]));
-            prods[A] = newA;
+        if (prefix.length > 0) {
+          // Generate new Name
+          let prime = A + "_fact";
+          let counter = 1;
+          while (prods[prime]) { prime = A + "_fact" + counter++; }
 
-            // New Prime: The remainders
-            const newPrime = [];
-            for (const r of group) {
-              const remainder = r.slice(prefix.length);
-              // CORNER CASE: If remainder is empty (consumed by prefix), it becomes Epsilon
-              newPrime.push(remainder.length ? remainder : ['ε']);
-            }
-            prods[prime] = newPrime;
-            
-            changed = true;
-            break; 
+          // Update A
+          const newA = prods[A].filter(r => !group.includes(r));
+          newA.push([...prefix, prime]);
+          prods[A] = newA;
+
+          // Create New Rule (S_fact)
+          const newPrime = [];
+          for (const r of group) {
+            const remainder = r.slice(prefix.length);
+            newPrime.push(remainder.length ? remainder : ['ε']);
           }
+          prods[prime] = newPrime;
+
+          // STOP: We do not loop back, so we only factor one level deep.
         }
       }
-      if (changed) break;
     }
   }
   return prods;
 }
-
 /* =========================================
    7. REGEX ENGINE & MATCHING
    ========================================= */
@@ -504,7 +464,7 @@ function renderFirstFollow(prods, FIRST, FOLLOW) {
       <td style="padding:8px;border-bottom:1px solid #eee;color:#d97706">${escapeHtml(setPrettySet(FOLLOW[A]))}</td>
     </tr>`;
   }).join('');
-  
+
   return `<table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:14px;">
     <thead><tr style="background:#f3f4f6;text-align:left">
       <th style="padding:8px">Nonterminal</th>
@@ -561,171 +521,171 @@ function renderConflicts(conflicts) {
 
 document.addEventListener('DOMContentLoaded', () => {
 
-    const get = (id) => document.getElementById(id);
+  const get = (id) => document.getElementById(id);
 
-    // Tab Logic
-    document.querySelectorAll('.tab').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-            btn.classList.add('active');
-            const p = get(btn.dataset.tab + '-panel');
-            if(p) p.classList.add('active');
-        });
+  // Tab Logic
+  document.querySelectorAll('.tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      const p = get(btn.dataset.tab + '-panel');
+      if (p) p.classList.add('active');
     });
+  });
 
-    // 1. First & Follow
-    const btnExFF = get('example-first');
-    if(btnExFF) btnExFF.addEventListener('click', () => {
-        const el = get('grammar-first');
-        if(el) el.value = "E -> T E'\nE' -> + T E' | ε\nT -> F T'\nT' -> * F T' | ε\nF -> ( E ) | id";
-        toast("Example Loaded");
-    });
+  // 1. First & Follow
+  const btnExFF = get('example-first');
+  if (btnExFF) btnExFF.addEventListener('click', () => {
+    const el = get('grammar-first');
+    if (el) el.value = "E -> T E'\nE' -> + T E' | ε\nT -> F T'\nT' -> * F T' | ε\nF -> ( E ) | id";
+    toast("Example Loaded");
+  });
 
-    const btnRunFF = get('compute-first');
-    if(btnRunFF) btnRunFF.addEventListener('click', () => {
-        const el = get('grammar-first');
-        const out = get('first-output');
-        if(!el || !out) return;
-        const raw = el.value.trim();
-        if(!raw) return toast("Please enter a grammar");
-        const prods = parseGrammar(raw);
-        if(Object.keys(prods).length === 0) return toast("Invalid Grammar");
-        const FIRST = computeFirst(prods);
-        const FOLLOW = computeFollow(prods, FIRST, identifySymbols(prods).start);
-        out.innerHTML = renderFirstFollow(prods, FIRST, FOLLOW);
-    });
+  const btnRunFF = get('compute-first');
+  if (btnRunFF) btnRunFF.addEventListener('click', () => {
+    const el = get('grammar-first');
+    const out = get('first-output');
+    if (!el || !out) return;
+    const raw = el.value.trim();
+    if (!raw) return toast("Please enter a grammar");
+    const prods = parseGrammar(raw);
+    if (Object.keys(prods).length === 0) return toast("Invalid Grammar");
+    const FIRST = computeFirst(prods);
+    const FOLLOW = computeFollow(prods, FIRST, identifySymbols(prods).start);
+    out.innerHTML = renderFirstFollow(prods, FIRST, FOLLOW);
+  });
 
-    // 2. Left Recursion
-    const btnExLR = get('example-leftrec');
-    if(btnExLR) btnExLR.addEventListener('click', () => {
-        const el = get('grammar-leftrec');
-        if(el) el.value = "E -> E + T | T\nT -> T * F | F\nF -> ( E ) | id";
-        toast("Example Loaded");
-    });
+  // 2. Left Recursion
+  const btnExLR = get('example-leftrec');
+  if (btnExLR) btnExLR.addEventListener('click', () => {
+    const el = get('grammar-leftrec');
+    if (el) el.value = "E -> E + T | T\nT -> T * F | F\nF -> ( E ) | id";
+    toast("Example Loaded");
+  });
 
-    const btnRunLR = get('run-leftrec');
-    if(btnRunLR) btnRunLR.addEventListener('click', () => {
-        const el = get('grammar-leftrec');
-        const out = get('leftrec-output');
-        if(!el || !out) return;
-        const prods = parseGrammar(el.value);
-        if(Object.keys(prods).length === 0) return toast("Invalid Grammar");
-        const res = eliminateLeftRecursion(prods);
-        out.innerHTML = renderTransformedGrammar(res);
-    });
+  const btnRunLR = get('run-leftrec');
+  if (btnRunLR) btnRunLR.addEventListener('click', () => {
+    const el = get('grammar-leftrec');
+    const out = get('leftrec-output');
+    if (!el || !out) return;
+    const prods = parseGrammar(el.value);
+    if (Object.keys(prods).length === 0) return toast("Invalid Grammar");
+    const res = eliminateLeftRecursion(prods);
+    out.innerHTML = renderTransformedGrammar(res);
+  });
 
-    // 3. Left Factoring
-    const btnExLF = get('example-leftfact');
-    if(btnExLF) btnExLF.addEventListener('click', () => {
-        const el = get('grammar-leftfact');
-        if(el) el.value = "S -> i E t S | i E t S e S | a\nE -> b";
-        toast("Example Loaded");
-    });
+  // 3. Left Factoring
+  const btnExLF = get('example-leftfact');
+  if (btnExLF) btnExLF.addEventListener('click', () => {
+    const el = get('grammar-leftfact');
+    if (el) el.value = "S -> i E t S | i E t S e S | a\nE -> b";
+    toast("Example Loaded");
+  });
 
-    const btnRunLF = get('run-leftfact');
-    if(btnRunLF) btnRunLF.addEventListener('click', () => {
-        const el = get('grammar-leftfact');
-        const out = get('leftfact-output');
-        if(!el || !out) return;
-        const prods = parseGrammar(el.value);
-        if(Object.keys(prods).length === 0) return toast("Invalid Grammar");
-        const res = leftFactor(prods);
-        out.innerHTML = renderTransformedGrammar(res);
-    });
+  const btnRunLF = get('run-leftfact');
+  if (btnRunLF) btnRunLF.addEventListener('click', () => {
+    const el = get('grammar-leftfact');
+    const out = get('leftfact-output');
+    if (!el || !out) return;
+    const prods = parseGrammar(el.value);
+    if (Object.keys(prods).length === 0) return toast("Invalid Grammar");
+    const res = leftFactor(prods);
+    out.innerHTML = renderTransformedGrammar(res);
+  });
 
-    // 4. LL(1) Table
-    const btnExLL = get('example-ll1');
-    if(btnExLL) btnExLL.addEventListener('click', () => {
-        const el = get('grammar-ll1');
-        if(el) el.value = "S -> A\nA -> a B | Ad\nB -> b\nC -> g"; 
-        toast("Example (Conflict) Loaded");
-    });
+  // 4. LL(1) Table
+  const btnExLL = get('example-ll1');
+  if (btnExLL) btnExLL.addEventListener('click', () => {
+    const el = get('grammar-ll1');
+    if (el) el.value = "S -> A\nA -> a B | Ad\nB -> b\nC -> g";
+    toast("Example (Conflict) Loaded");
+  });
 
-    const btnRunLL = get('run-ll1');
-    if(btnRunLL) btnRunLL.addEventListener('click', () => {
-        const el = get('grammar-ll1');
-        const out = get('ll1-output');
-        if(!el || !out) return;
-        const prods = parseGrammar(el.value);
-        if(Object.keys(prods).length === 0) return toast("Invalid Grammar");
-        const FIRST = computeFirst(prods);
-        const FOLLOW = computeFollow(prods, FIRST, identifySymbols(prods).start);
-        const tableObj = buildPredictiveTable(prods, FIRST, FOLLOW);
-        out.innerHTML = `
+  const btnRunLL = get('run-ll1');
+  if (btnRunLL) btnRunLL.addEventListener('click', () => {
+    const el = get('grammar-ll1');
+    const out = get('ll1-output');
+    if (!el || !out) return;
+    const prods = parseGrammar(el.value);
+    if (Object.keys(prods).length === 0) return toast("Invalid Grammar");
+    const FIRST = computeFirst(prods);
+    const FOLLOW = computeFollow(prods, FIRST, identifySymbols(prods).start);
+    const tableObj = buildPredictiveTable(prods, FIRST, FOLLOW);
+    out.innerHTML = `
             <h4 style="margin:0 0 10px 0">First & Follow</h4>
             ${renderFirstFollow(prods, FIRST, FOLLOW)}
             <h4 style="margin:20px 0 10px 0">Predictive Parsing Table</h4>
             ${renderPredictiveTable(tableObj)}
             ${renderConflicts(tableObj.conflicts)}
         `;
-    });
+  });
 
-    // 5. Regex Tester
-    const btnExReg = get('example-regex');
-    if(btnExReg) btnExReg.addEventListener('click', () => {
-        const p = get('regex-pattern');
-        const t = get('regex-text');
-        if(p) p.value = "a(b|c)+";
-        if(t) t.value = "test abc abb acbc aXc";
-        toast("Email Regex Loaded");
-    });
+  // 5. Regex Tester
+  const btnExReg = get('example-regex');
+  if (btnExReg) btnExReg.addEventListener('click', () => {
+    const p = get('regex-pattern');
+    const t = get('regex-text');
+    if (p) p.value = "a(b|c)+";
+    if (t) t.value = "test abc abb acbc aXc";
+    toast("Email Regex Loaded");
+  });
 
-    const btnRunReg = get('run-regex');
-    if(btnRunReg) btnRunReg.addEventListener('click', () => {
-        const pat = get('regex-pattern');
-        const txt = get('regex-text');
-        const outH = get('regex-highlight');
-        const outL = get('regex-list');
-        
-        if(!pat || !txt || !outH) return;
-        
-        const textVal = txt.value;
-        const res = testRegex(pat.value, textVal);
-        
-        if(res.error) {
-            outH.innerHTML = `<div style="color:#ef4444;font-weight:bold">Error: ${res.error}</div>`;
-            if(outL) outL.innerHTML = '';
-            return;
-        }
-        
-        const matches = res.matches;
-        
-        // Render Highlighted Text
-        let html = '';
-        let lastIdx = 0;
-        
-        if(matches.length === 0) {
-            html = escapeHtml(textVal);
-        } else {
-            matches.forEach(m => {
-                html += escapeHtml(textVal.substring(lastIdx, m.index));
-                html += `<span style="background:#fde68a;color:#92400e;border-radius:2px;font-weight:bold">${escapeHtml(m.text)}</span>`;
-                lastIdx = m.index + m.text.length;
-            });
-            html += escapeHtml(textVal.substring(lastIdx));
-        }
-        outH.innerHTML = `<div style="font-family:monospace;white-space:pre-wrap;background:#fff;padding:12px;border:1px solid #e5e7eb;border-radius:6px;min-height:50px">${html}</div>`;
-        
-        // Render Match List
-        if(outL) {
-            if(matches.length === 0) {
-                outL.innerHTML = '<div style="color:#6b7280;margin-top:10px">No matches found.</div>';
-            } else {
-                const listHtml = matches.map((m, i) => `
+  const btnRunReg = get('run-regex');
+  if (btnRunReg) btnRunReg.addEventListener('click', () => {
+    const pat = get('regex-pattern');
+    const txt = get('regex-text');
+    const outH = get('regex-highlight');
+    const outL = get('regex-list');
+
+    if (!pat || !txt || !outH) return;
+
+    const textVal = txt.value;
+    const res = testRegex(pat.value, textVal);
+
+    if (res.error) {
+      outH.innerHTML = `<div style="color:#ef4444;font-weight:bold">Error: ${res.error}</div>`;
+      if (outL) outL.innerHTML = '';
+      return;
+    }
+
+    const matches = res.matches;
+
+    // Render Highlighted Text
+    let html = '';
+    let lastIdx = 0;
+
+    if (matches.length === 0) {
+      html = escapeHtml(textVal);
+    } else {
+      matches.forEach(m => {
+        html += escapeHtml(textVal.substring(lastIdx, m.index));
+        html += `<span style="background:#fde68a;color:#92400e;border-radius:2px;font-weight:bold">${escapeHtml(m.text)}</span>`;
+        lastIdx = m.index + m.text.length;
+      });
+      html += escapeHtml(textVal.substring(lastIdx));
+    }
+    outH.innerHTML = `<div style="font-family:monospace;white-space:pre-wrap;background:#fff;padding:12px;border:1px solid #e5e7eb;border-radius:6px;min-height:50px">${html}</div>`;
+
+    // Render Match List
+    if (outL) {
+      if (matches.length === 0) {
+        outL.innerHTML = '<div style="color:#6b7280;margin-top:10px">No matches found.</div>';
+      } else {
+        const listHtml = matches.map((m, i) => `
                     <div style="display:flex;justify-content:space-between;padding:6px 10px;background:#f9fafb;border-bottom:1px solid #e5e7eb;font-size:13px;font-family:monospace">
-                        <span><strong>#${i+1}</strong>: ${escapeHtml(m.text)}</span>
+                        <span><strong>#${i + 1}</strong>: ${escapeHtml(m.text)}</span>
                         <span style="color:#6b7280">Index: ${m.index}</span>
                     </div>
                 `).join('');
-                
-                outL.innerHTML = `
+
+        outL.innerHTML = `
                     <div style="margin-top:15px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
                         <div style="background:#f3f4f6;padding:8px 10px;font-weight:bold;font-size:13px;border-bottom:1px solid #e5e7eb">Match List (${matches.length})</div>
                         <div style="max-height:150px;overflow-y:auto">${listHtml}</div>
                     </div>
                 `;
-            }
-        }
-    });
+      }
+    }
+  });
 });
