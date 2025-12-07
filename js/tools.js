@@ -538,7 +538,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnExFF = get('example-first');
   if (btnExFF) btnExFF.addEventListener('click', () => {
     const el = get('grammar-first');
-    if (el) el.value = "E -> T E'\nE' -> + T E' | ε\nT -> F T'\nT' -> * F T' | ε\nF -> ( E ) | id";
+    if (el) el.value = "S -> ACB | Cbb | Ba\nA -> da | BC\nB -> g | ε\nC -> h | ε";
     toast("Example Loaded");
   });
 
@@ -579,7 +579,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnExLF = get('example-leftfact');
   if (btnExLF) btnExLF.addEventListener('click', () => {
     const el = get('grammar-leftfact');
-    if (el) el.value = "S -> i E t S | i E t S e S | a\nE -> b";
+    if (el) el.value = "S ->bSSaaS | bSSaSb | bSb | a";
     toast("Example Loaded");
   });
 
@@ -598,7 +598,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnExLL = get('example-ll1');
   if (btnExLL) btnExLL.addEventListener('click', () => {
     const el = get('grammar-ll1');
-    if (el) el.value = "S -> A\nA -> a B | Ad\nB -> b\nC -> g";
+    if (el) el.value = "E -> T E'\nE' -> + T E' | ε\nT -> F T'\nT' -> * F T' | ε\nF -> ( E ) | id";
     toast("Example (Conflict) Loaded");
   });
 
