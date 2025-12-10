@@ -1,13 +1,11 @@
 <!doctype html>
 <html lang="en">
-
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Workbench - Compiler Toolkit</title>
   <link rel="stylesheet" href="css/styles.css" />
 </head>
-
 <body>
 
   <header class="site-header">
@@ -15,9 +13,7 @@
       <a class="brand" href="index.html">
         <span class="logo">C</span> Compiler Toolkit
       </a>
-      <nav>
-        <a class="nav-link active" href="tools.html">Workbench</a>
-      </nav>
+      <nav><a class="nav-link active" href="tools.html">Workbench</a></nav>
     </div>
   </header>
 
@@ -26,20 +22,15 @@
     <p class="page-subtitle">Select a tool, load an example, and process your grammar.</p>
 
     <div class="tool-card">
+      
       <div class="tabs-header">
         <button class="tab active" data-tab="first">FIRST & FOLLOW</button>
         <button class="tab" data-tab="left-rec">Left Recursion</button>
         <button class="tab" data-tab="left-fact">Left Factoring</button>
         <button class="tab" data-tab="ll1">LL(1) Table</button>
         <button class="tab" data-tab="regex">Regex Tester</button>
-        <!-- NEW TOOLS -->
-        <button class="tab" data-tab="gval">Grammar Validator</button>
-        <button class="tab" data-tab="nfa-dfa">NFA → DFA</button>
-
-
       </div>
 
-      <!-- FIRST & FOLLOW -->
       <div class="tab-panel active" id="first-panel">
         <div class="workspace">
           <div class="pane input">
@@ -60,7 +51,6 @@
         </div>
       </div>
 
-      <!-- LEFT RECURSION -->
       <div class="tab-panel" id="left-rec-panel">
         <div class="workspace">
           <div class="pane input">
@@ -78,7 +68,6 @@
         </div>
       </div>
 
-      <!-- LEFT FACTORING -->
       <div class="tab-panel" id="left-fact-panel">
         <div class="workspace">
           <div class="pane input">
@@ -96,7 +85,6 @@
         </div>
       </div>
 
-      <!-- LL(1) TABLE -->
       <div class="tab-panel" id="ll1-panel">
         <div class="workspace">
           <div class="pane input">
@@ -114,16 +102,15 @@
         </div>
       </div>
 
-      <!-- REGEX TESTER -->
       <div class="tab-panel" id="regex-panel">
         <div class="workspace">
           <div class="pane input">
             <label>Regex Pattern</label>
             <input type="text" id="regex-pattern" placeholder="a(b|c)+" style="flex-grow:0; margin-bottom:20px;">
-
+            
             <label>Test String</label>
             <textarea id="regex-text" placeholder="test abc abb acbc" style="min-height:150px;"></textarea>
-
+            
             <div class="actions">
               <button id="run-regex" class="btn primary">Test Pattern</button>
               <button id="example-regex" class="btn outline">Load Example</button>
@@ -131,78 +118,16 @@
           </div>
           <div class="pane output">
             <label>Highlighted Matches</label>
-            <div id="regex-highlight" class="result-box"
-              style="min-height:100px; max-height:200px; margin-bottom:20px;"></div>
+            <div id="regex-highlight" class="result-box" style="min-height:100px; max-height:200px; margin-bottom:20px;"></div>
             <label>Match List</label>
             <div id="regex-list" class="result-box" style="background:#fdfdfd;"></div>
           </div>
         </div>
       </div>
 
-      <!-- NEW TOOL 1: GRAMMAR VALIDATOR -->
-      <div class="tab-panel" id="gval-panel">
-        <div class="workspace">
-          <div class="pane input">
-            <label>Grammar to Validate</label>
-            <textarea id="grammar-gval" placeholder="S -> A a | b&#10;A -> A c | ε"></textarea>
-            <div class="actions">
-              <button id="run-gval" class="btn primary">Validate Grammar</button>
-              <button id="example-gval" class="btn outline">Load Example</button>
-            </div>
-            <p class="hint">
-              Checks undefined nonterminals, unreachable symbols and never-used rules.
-            </p>
-          </div>
-          <div class="pane output">
-            <label>Validation Report</label>
-            <div id="gval-output" class="result-box">
-              <span style="color:#aaa">Run validation to see a report...</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- NEW TOOL 2: NFA → DFA -->
-      <div class="tab-panel" id="nfa-dfa-panel">
-        <div class="workspace">
-          <div class="pane input">
-            <label>NFA Description</label>
-            <textarea id="nfa-input" placeholder="States: q0,q1,q2
-Alphabet: a,b
-Start: q0
-Accept: q2
-Transitions:
-q0,a->q0
-q0,b->q1
-q1,b->q2"></textarea>
-            <div class="actions">
-              <button id="run-nfa-dfa" class="btn primary">Convert & Minimize</button>
-              <button id="example-nfa-dfa" class="btn outline">Load Example</button>
-            </div>
-            <p class="hint">
-              Format:
-              <br>States: comma-separated
-              <br>Alphabet: symbols (no ε)
-              <br>Start: one state
-              <br>Accept: comma-separated
-              <br>Transitions: one per line: <code>q,symbol-&gt;next1,next2</code>. Use <code>epsilon</code> or
-              <code>ε</code> for ε-transitions.
-            </p>
-          </div>
-          <div class="pane output">
-            <label>DFA (Completed) &amp; Minimized DFA</label>
-            <div id="nfa-dfa-output" class="result-box">
-              <span style="color:#aaa;">Run the tool to see the DFA tables.</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
     </div>
-
   </main>
 
   <script src="js/tools.js"></script>
 </body>
-
 </html>
