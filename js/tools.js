@@ -689,3 +689,678 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 });
+
+/* =========================================
+   10. EXTRA TOOLS: GRAMMAR VALIDATOR + NFA→DFA
+   (APPEND ONLY – DO NOT CHANGE EXISTING CODE)
+   ========================================= */
+
+function validateGrammar(prods) {
+  const nonterms = Object.keys(prods);
+  const sym = identifySymbols(prods);
+  const start = sym.start;
+  const defined = new Set(nonterms);
+  const used = new Set();
+
+  // Collect which nonterminals appear on RHS
+  for (const [A, rhss] of Object.entries(prods)) {
+    for (const rhs of rhss) {
+      for (const t of rhs) {
+        if (defined.has(t)) {
+          used.add(t);
+        }
+      }
+    }
+  }
+
+  // Undefined nonterminals: used but never defined
+  const undefinedNT = Array.from(used).filter(x => !defined.has(x));
+
+  // Reachability from start
+  const reachable = new Set();
+  if (start && defined.has(start)) {
+    const stack = [start];
+    reachable.add(start);
+    while (stack.length) {
+      const A = stack.pop();
+      const rhss = prods[A] || [];
+      for (const rhs of rhss) {
+        for (const t of rhs) {
+          if (defined.has(t) && !reachable.has(t)) {
+            reachable.add(t);
+            stack.push(t);
+          }
+        }
+      }
+    }
+  }
+
+  const unreachable = nonterms.filter(A => !reachable.has(A));
+
+  // Never-used: defined but never appears on any RHS (except maybe start)
+  const neverUsed = nonterms.filter(A => !used.has(A) && A !== start);
+
+  // ---------- PRODUCTIVE SYMBOL CHECK ----------
+  // Productive = can derive a string of terminals (possibly ε)
+  const terminalsSet = new Set(sym.terminals);
+  const productive = new Set();
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [A, rhss] of Object.entries(prods)) {
+      if (productive.has(A)) continue;
+
+      for (const rhs of rhss) {
+        // ε alone is productive
+        if (rhs.length === 1 && (rhs[0] === 'ε' || rhs[0] === 'epsilon')) {
+          productive.add(A);
+          changed = true;
+          break;
+        }
+
+        // Check if every symbol in RHS is either terminal or already productive
+        let allGood = true;
+        for (const s of rhs) {
+          if (s === 'ε' || s === 'epsilon') continue;
+          const isTerminal = terminalsSet.has(s) && !defined.has(s);
+          const isProdNonterm = defined.has(s) && productive.has(s);
+          if (!isTerminal && !isProdNonterm) {
+            allGood = false;
+            break;
+          }
+        }
+        if (allGood) {
+          productive.add(A);
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+
+  const nonProductive = nonterms.filter(A => !productive.has(A));
+
+  return {
+    start,
+    nonterminals: nonterms,
+    terminals: sym.terminals,
+    undefinedNT,
+    unreachable,
+    neverUsed,
+    productive: Array.from(productive),
+    nonProductive
+  };
+}
+
+
+function renderGrammarValidationReport(rep) {
+  const esc = escapeHtml;
+
+  let html = `<div style="font-family:var(--font-mono, JetBrains Mono, monospace); font-size:13px;">`;
+
+  // Summary
+  html += `<div style="margin-bottom:12px;">
+    <div><strong>Start Symbol:</strong> ${rep.start ? esc(rep.start) : '<em>Not detected</em>'}</div>
+    <div><strong>Nonterminals:</strong> ${esc(rep.nonterminals.join(', ') || '—')}</div>
+    <div><strong>Terminals:</strong> ${esc(rep.terminals.join(', ') || '—')}</div>
+  </div>`;
+
+  function section(title, items, okText) {
+    if (!items || items.length === 0) {
+      return `<div style="margin-bottom:10px;padding:8px 10px;border-radius:6px;background:#ecfdf3;color:#166534;border:1px solid #bbf7d0;">
+        <strong>${esc(title)}:</strong> ${esc(okText)}
+      </div>`;
+    }
+    return `<div style="margin-bottom:10px;padding:8px 10px;border-radius:6px;background:#fef2f2;color:#991b1b;border:1px solid #fecaca;">
+      <strong>${esc(title)}:</strong>
+      <ul style="margin:6px 0 0 18px; padding:0;">
+        ${items.map(x => `<li style="margin:0;">${esc(x)}</li>`).join('')}
+      </ul>
+    </div>`;
+  }
+
+  html += section(
+    'Undefined Nonterminals',
+    rep.undefinedNT,
+    'No undefined nonterminals found.'
+  );
+
+  html += section(
+    'Unreachable Nonterminals (from start)',
+    rep.unreachable,
+    'All nonterminals are reachable from the start symbol.'
+  );
+
+  html += section(
+    'Never-Used Nonterminals',
+    rep.neverUsed,
+    'Every nonterminal is used in some production.'
+  );
+
+  // NEW: Productive symbols report
+  html += section(
+    'Non-Productive Nonterminals',
+    rep.nonProductive,
+    'Every nonterminal can derive a string of terminals (possibly ε).'
+  );
+
+  html += `</div>`;
+  return html;
+}
+/* =========================================
+   SINGLE TOOL: NFA → DFA → MIN DFA
+   ========================================= */
+
+/* Parse NFA (robust) */
+function parseNFACombined(text) {
+  const lines = String(text || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
+
+  const stateSet = new Set();
+  const acceptSet = new Set();
+  const alphaSet = new Set();
+  const transitions = {};
+
+  let statesList = [];
+  let start = null;
+  let inTrans = false;
+
+  for (const line of lines) {
+    if (/^states\s*:/i.test(line)) {
+      statesList = line.split(':')[1]
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      statesList.forEach(s => stateSet.add(s));
+      continue;
+    }
+    if (/^alphabet\s*:/i.test(line)) {
+      const parts = line.split(':')[1]
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      parts.forEach(sym => {
+        if (sym.toLowerCase() !== 'epsilon' && sym !== 'ε') {
+          alphaSet.add(sym);
+        }
+      });
+      continue;
+    }
+    if (/^start\s*:/i.test(line)) {
+      start = line.split(':')[1].trim();
+      if (start) stateSet.add(start);
+      continue;
+    }
+    if (/^accept\s*:/i.test(line)) {
+      line.split(':')[1]
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .forEach(s => {
+          acceptSet.add(s);
+          stateSet.add(s);
+        });
+      continue;
+    }
+    if (/^transitions\s*:/i.test(line)) {
+      inTrans = true;
+      continue;
+    }
+
+    if (inTrans) {
+      // q0,a->q1,q2
+      const parts = line.split('->');
+      if (parts.length !== 2) continue;
+
+      const left = parts[0].split(',');
+      if (left.length !== 2) continue;
+
+      const from = left[0].trim();
+      let sym = left[1].trim();
+      if (!from || !sym) continue;
+
+      if (sym.toLowerCase() === 'epsilon' || sym === 'ε') {
+        sym = 'ε';
+      } else {
+        alphaSet.add(sym);
+      }
+
+      const dests = parts[1]
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      if (!dests.length) continue;
+
+      stateSet.add(from);
+      dests.forEach(d => stateSet.add(d));
+
+      if (!transitions[from]) transitions[from] = {};
+      if (!transitions[from][sym]) transitions[from][sym] = new Set();
+      dests.forEach(d => transitions[from][sym].add(d));
+    }
+  }
+
+  if (!statesList.length && stateSet.size) {
+    statesList = Array.from(stateSet);
+  }
+
+  if (!statesList.length) {
+    return { error: 'No states found. Please add "States: ..."' };
+  }
+
+  if (!start) {
+    start = statesList[0];
+  }
+
+  const alphabet = Array.from(alphaSet);
+
+  return {
+    states: statesList,
+    alphabet,
+    start,
+    accepts: Array.from(acceptSet),
+    transitions
+  };
+}
+
+/* ε-closure */
+function epsilonClosureCombined(stateSet, transitions) {
+  const stack = Array.from(stateSet);
+  const closure = new Set(stateSet);
+
+  while (stack.length) {
+    const s = stack.pop();
+    const eps = transitions[s] && transitions[s]['ε'];
+    if (!eps) continue;
+    for (const t of eps) {
+      if (!closure.has(t)) {
+        closure.add(t);
+        stack.push(t);
+      }
+    }
+  }
+  return closure;
+}
+
+/* move for NFA */
+function moveNFACombined(stateSet, sym, transitions) {
+  const res = new Set();
+  for (const s of stateSet) {
+    const ts = transitions[s] && transitions[s][sym];
+    if (!ts) continue;
+    for (const t of ts) res.add(t);
+  }
+  return res;
+}
+
+/* NFA → DFA (subset construction) */
+function nfaToDfaCombined(nfa) {
+  if (nfa.error) return nfa;
+
+  const { alphabet, start, accepts, transitions } = nfa;
+  const symbols = (alphabet || []).slice();
+  const acceptSet = new Set(accepts || []);
+
+  function setName(set) {
+    const arr = Array.from(set);
+    arr.sort();
+    return arr.join(',') || '∅';
+  }
+
+  const startClosure = epsilonClosureCombined(new Set([start]), transitions);
+  const startName = setName(startClosure);
+
+  const states = [];
+  const dfaTrans = {};
+  const dfaAccepts = new Set();
+  const seen = {};
+  const queue = [];
+
+  seen[startName] = startClosure;
+  states.push(startName);
+  queue.push(startClosure);
+
+  if (Array.from(startClosure).some(s => acceptSet.has(s))) {
+    dfaAccepts.add(startName);
+  }
+
+  while (queue.length) {
+    const curSet = queue.shift();
+    const curName = setName(curSet);
+    if (!dfaTrans[curName]) dfaTrans[curName] = {};
+
+    for (const sym of symbols) {
+      const moved = moveNFACombined(curSet, sym, transitions);
+      if (!moved.size) continue;
+      const closure = epsilonClosureCombined(moved, transitions);
+      const name = setName(closure);
+
+      if (!seen[name]) {
+        seen[name] = closure;
+        states.push(name);
+        queue.push(closure);
+        if (Array.from(closure).some(s => acceptSet.has(s))) {
+          dfaAccepts.add(name);
+        }
+      }
+      dfaTrans[curName][sym] = name;
+    }
+  }
+
+  return {
+    states,
+    alphabet: symbols,
+    start: startName,
+    accepts: Array.from(dfaAccepts),
+    transitions: dfaTrans
+  };
+}
+
+/* Complete DFA with dead state */
+function completeDFACombined(dfa) {
+  if (dfa.error) return dfa;
+
+  const { states, alphabet, start, accepts, transitions } = dfa;
+  const newStates = states.slice();
+  const newTrans = {};
+  const acceptSet = new Set(accepts || []);
+
+  let dead = '⊥';
+  while (newStates.includes(dead)) dead += "'";
+
+  let needDead = false;
+
+  for (const s of states) {
+    newTrans[s] = {};
+    const tOld = transitions[s] || {};
+    for (const a of alphabet) {
+      if (tOld[a]) {
+        newTrans[s][a] = tOld[a];
+      } else {
+        newTrans[s][a] = dead;
+        needDead = true;
+      }
+    }
+  }
+
+  if (needDead) {
+    newStates.push(dead);
+    newTrans[dead] = {};
+    for (const a of alphabet) {
+      newTrans[dead][a] = dead;
+    }
+  }
+
+  return {
+    states: newStates,
+    alphabet,
+    start,
+    accepts: Array.from(acceptSet),
+    transitions: newTrans
+  };
+}
+
+/* Remove unreachable states */
+function removeUnreachableDFACombined(dfa) {
+  if (dfa.error) return dfa;
+
+  const { states, alphabet, start, accepts, transitions } = dfa;
+  if (!start) return dfa;
+
+  const reachable = new Set([start]);
+  const stack = [start];
+
+  while (stack.length) {
+    const s = stack.pop();
+    const trans = transitions[s] || {};
+    for (const a of alphabet) {
+      const to = trans[a];
+      if (to && !reachable.has(to)) {
+        reachable.add(to);
+        stack.push(to);
+      }
+    }
+  }
+
+  const newStates = states.filter(s => reachable.has(s));
+  const newAccepts = (accepts || []).filter(s => reachable.has(s));
+  const newTrans = {};
+
+  for (const s of newStates) {
+    const tOld = transitions[s] || {};
+    newTrans[s] = {};
+    for (const a of alphabet) {
+      const to = tOld[a];
+      if (to && reachable.has(to)) {
+        newTrans[s][a] = to;
+      }
+    }
+  }
+
+  return {
+    states: newStates,
+    alphabet,
+    start,
+    accepts: newAccepts,
+    transitions: newTrans
+  };
+}
+
+/* Minimize DFA via partition refinement */
+function minimizeDFACombined(dfa0) {
+  if (dfa0.error) return dfa0;
+
+  const dfa = removeUnreachableDFACombined(dfa0);
+  const { states, alphabet, start, accepts, transitions } = dfa;
+  const acceptSet = new Set(accepts || []);
+
+  if (!states.length) return { error: 'DFA has no states.' };
+
+  const finals = states.filter(s => acceptSet.has(s));
+  const nonFinals = states.filter(s => !acceptSet.has(s));
+
+  let P = [];
+  if (finals.length) P.push(new Set(finals));
+  if (nonFinals.length) P.push(new Set(nonFinals));
+  if (!P.length) return { error: 'No partition could be formed.' };
+
+  function blockIndex(st, blocks) {
+    for (let i = 0; i < blocks.length; i++) {
+      if (blocks[i].has(st)) return i;
+    }
+    return -1;
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const newP = [];
+
+    for (const block of P) {
+      if (block.size <= 1) {
+        newP.push(block);
+        continue;
+      }
+
+      const groups = new Map();
+
+      for (const s of block) {
+        let sig = '';
+        const trans = transitions[s] || {};
+        for (const a of alphabet) {
+          const to = trans[a] || null;
+          const idx = to ? blockIndex(to, P) : -1;
+          sig += a + ':' + idx + ';';
+        }
+        if (!groups.has(sig)) groups.set(sig, new Set());
+        groups.get(sig).add(s);
+      }
+
+      if (groups.size === 1) {
+        newP.push(block);
+      } else {
+        changed = true;
+        for (const g of groups.values()) newP.push(g);
+      }
+    }
+
+    P = newP;
+  }
+
+  const newStates = [];
+  const className = new Map();
+
+  for (const block of P) {
+    const arr = Array.from(block).sort();
+    const name = arr.join(',');
+    newStates.push(name);
+    arr.forEach(s => className.set(s, name));
+  }
+
+  const newStart = className.get(start);
+  const newAccepts = new Set();
+
+  for (const name of newStates) {
+    const parts = name.split(',');
+    if (parts.some(s => acceptSet.has(s))) {
+      newAccepts.add(name);
+    }
+  }
+
+  const newTrans = {};
+  for (const block of P) {
+    const arr = Array.from(block);
+    const rep = arr[0];
+    const repName = className.get(rep);
+    newTrans[repName] = {};
+
+    const trans = transitions[rep] || {};
+    for (const a of alphabet) {
+      const to = trans[a];
+      if (to) newTrans[repName][a] = className.get(to);
+    }
+  }
+
+  return {
+    states: newStates,
+    alphabet,
+    start: newStart,
+    accepts: Array.from(newAccepts),
+    transitions: newTrans
+  };
+}
+
+/* Render DFA table */
+function renderDfaTableCombined(dfa) {
+  if (dfa.error) {
+    return `<div style="color:#b91c1c;font-weight:bold;">Error: ${escapeHtml(dfa.error)}</div>`;
+  }
+
+  const esc = escapeHtml;
+  const symbols = dfa.alphabet || [];
+  const accSet = new Set(dfa.accepts || []);
+
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+  html += '<thead><tr>';
+  html += '<th style="padding:8px;border-bottom:1px solid #e2e8f0;">State</th>';
+  symbols.forEach(sym => {
+    html += `<th style="padding:8px;border-bottom:1px solid #e2e8f0;">on ${esc(sym)}</th>`;
+  });
+  html += '<th style="padding:8px;border-bottom:1px solid #e2e8f0;">Accepting?</th>';
+  html += '</tr></thead><tbody>';
+
+  dfa.states.forEach(st => {
+    const isStart = st === dfa.start;
+    const isAcc = accSet.has(st);
+    const trans = dfa.transitions[st] || {};
+
+    html += '<tr>';
+    html += `<td style="padding:8px;border-bottom:1px solid #f1f5f9;font-weight:${isStart ? '700' : '500'};">`;
+    if (isStart) html += '→ ';
+    html += esc(st) + '</td>';
+
+    symbols.forEach(sym => {
+      const to = trans[sym] || '—';
+      html += `<td style="padding:8px;border-bottom:1px solid #f1f5f9;">${esc(to)}</td>`;
+    });
+
+    html += `<td style="padding:8px;border-bottom:1px solid #f1f5f9;">${isAcc ? '✅' : ''}</td>`;
+    html += '</tr>';
+  });
+
+  html += '</tbody></table>';
+  return html;
+}
+
+/* Render full pipeline summary */
+function renderNfaToMinDfa(text) {
+  const nfa = parseNFACombined(text);
+  if (nfa.error) {
+    return `<div style="color:#b91c1c;font-weight:bold;">Error: ${escapeHtml(nfa.error)}</div>`;
+  }
+
+  const dfa = nfaToDfaCombined(nfa);
+  if (dfa.error) return renderDfaTableCombined(dfa);
+
+  const dfaCompleted = completeDFACombined(dfa);
+  const dfaMin = minimizeDFACombined(dfaCompleted);
+
+  const esc = escapeHtml;
+
+  let html = `<div style="font-family:monospace;font-size:13px;margin-bottom:12px;">
+    <div><strong>NFA states:</strong> ${esc(nfa.states.join(', '))}</div>
+    <div><strong>Alphabet:</strong> ${esc((nfa.alphabet || []).join(', ') || '∅')}</div>
+    <div><strong>Start:</strong> ${esc(nfa.start)}</div>
+    <div><strong>Accepting:</strong> ${esc((nfa.accepts || []).join(', ') || '∅')}</div>
+  </div>`;
+
+  html += `<h4 style="margin:6px 0;">Completed DFA</h4>`;
+  html += renderDfaTableCombined(dfaCompleted);
+
+  html += `<h4 style="margin:16px 0 6px;">Minimized DFA</h4>`;
+  html += renderDfaTableCombined(dfaMin);
+
+  return html;
+}
+
+/* Hook up the NFA → Min DFA tab */
+document.addEventListener('DOMContentLoaded', () => {
+  const get = id => document.getElementById(id);
+
+  const btnEx = get('example-nfa-dfa');
+  if (btnEx) {
+    btnEx.addEventListener('click', () => {
+      const el = get('nfa-input');
+      if (el) {
+        el.value =
+`States: q0,q1,q2
+Alphabet: a,b
+Start: q0
+Accept: q2
+Transitions:
+q0,a->q0
+q0,b->q1
+q1,b->q2`;
+      }
+      toast('Example Loaded');
+    });
+  }
+
+  const btnRun = get('run-nfa-dfa');
+  if (btnRun) {
+    btnRun.addEventListener('click', () => {
+      const el = get('nfa-input');
+      const out = get('nfa-dfa-output');
+      if (!el || !out) return;
+      const raw = el.value.trim();
+      if (!raw) return toast('Please enter an NFA description');
+      out.innerHTML = renderNfaToMinDfa(raw);
+    });
+  }
+});
+
+
